@@ -535,7 +535,9 @@ public:
    }
 
    shader_core_ctx *shader_core() { return m_shader; }
-
+   
+   //EJ
+   register_file_cache* m_RFC; 
 private:
 
    void process_banks()
@@ -548,7 +550,7 @@ private:
    void allocate_reads();
 
    // types
-
+   //EJ
    class collector_unit_t;
 
    class op_t {
@@ -727,10 +729,17 @@ private:
                   new_addr_type RFC_addr= RFC->EJ_build_addr( reg , warp_id ) ;
                   unsigned idx ;
                   
-                  if( RFC -> EJ_probe( RFC_addr , idx  ) == HIT ){
+                  //EJ_LOG
+                  printf("[READ_RFC_REQs] reg = %d , wid = %d \n " , reg , warp_id ) ; 
+                  printf("[READ_RFC_REQs] addr = %d \n " , (int)RFC_addr ) ; 
+                  enum cache_request_status status = RFC -> EJ_probe( RFC_addr , idx );  
+                  printf("[READ_RFC_REQs] status = %d , idx = %d \n " , status , idx ) ; 
+                  //if( RFC -> EJ_probe( RFC_addr , idx  ) == HIT ){
+                  if( status == HIT ){
                //Check if op is in RFC or not 
                       m_RFC_queue.push_back(op) ;  
                   }else{
+                    assert( status == MISS ) ;
                     unsigned bank = op.get_bank();   
                     m_queue[bank].push_back(op);     //push op in m_queue[bank]
                   }
@@ -744,10 +753,6 @@ private:
          for( unsigned i=0; i<MAX_REG_OPERANDS*2; i++) {  // for all src op_ts: push to the queue
             const op_t &op = src[i];
             if( op.valid() ) {
-               //Check if op is in RFC or not 
-               // if in RFC 
-               // m_RFC_queue.push_back(op) ;
-               // else 
                     unsigned bank = op.get_bank();   
                     m_queue[bank].push_back(op);     //push op in m_queue[bank]
             }
@@ -1769,7 +1774,7 @@ public:
 	 bool check_if_non_released_reduction_barrier(warp_inst_t &inst);
 
     //EJ TODO
-    register_file_cache *m_RFC ; 
+    //register_file_cache *m_RFC ; 
 	
     private:
 	 unsigned inactive_lanes_accesses_sfu(unsigned active_count,double latency){

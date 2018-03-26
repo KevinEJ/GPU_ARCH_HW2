@@ -120,10 +120,10 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
     m_L1I = new read_only_cache( name,m_config->m_L1I_config,m_sid,get_shader_instruction_cache_id(),m_icnt,IN_L1I_MISS_QUEUE);
     
     //EJ TODO
-    char name_RFC[STRSIZE];
-    snprintf(name_RFC, STRSIZE, "RFC_%03d", m_sid);
+    //char name_RFC[STRSIZE];
+    //snprintf(name_RFC, STRSIZE, "RFC_%03d", m_sid);
     //m_RFC = new register_file_cache  ( name_RFC  ,m_config->m_RFC_config , m_sid , get_shader_instruction_cache_id() , m_icnt , IN_L1I_MISS_QUEUE);
-    m_RFC = new register_file_cache( name_RFC , m_config->m_RFC_config , m_sid , get_shader_instruction_cache_id() , NULL   , IN_L1T_MISS_QUEUE );
+    //m_RFC = new register_file_cache( name_RFC , m_config->m_RFC_config , m_sid , get_shader_instruction_cache_id() , NULL   , IN_L1T_MISS_QUEUE );
     //EJ END
     //
     m_warp.resize(m_config->max_warps_per_shader, shd_warp_t(this, warp_size));
@@ -2958,6 +2958,14 @@ void opndcoll_rfu_t::init( unsigned num_banks, shader_core_ctx *shader )
        m_cu[j]->init(j,num_banks,m_bank_warp_shift,shader->get_config(),this);
    }
    m_initialized=true;
+
+
+    //EJ TODO
+    char name_RFC[STRSIZE];
+    snprintf(name_RFC, STRSIZE, "RFC_%03d", m_shader->get_sid());
+    //m_RFC = new register_file_cache  ( name_RFC  ,m_config->m_RFC_config , m_sid , get_shader_instruction_cache_id() , m_icnt , IN_L1I_MISS_QUEUE);
+    m_RFC = new register_file_cache( name_RFC , m_shader->get_config()->m_RFC_config , m_shader->get_sid() , get_shader_instruction_cache_id() , NULL   , IN_L1T_MISS_QUEUE );
+    //EJend
 }
 
 int register_bank(int regnum, int wid, unsigned num_banks, unsigned bank_warp_shift)
@@ -2976,19 +2984,29 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
    unsigned n=0;
    //EJ TODO
    //
-   register_file_cache* RFC = shader_core()->m_RFC  ; 
+   //register_file_cache* RFC = shader_core()->m_RFC  ; 
+   register_file_cache* RFC = m_RFC  ; 
+   
    for( r=regs.begin(); r!=regs.end();r++,n++ ) { // for all register to be written 
       unsigned reg = *r;
       unsigned warp_id = inst.warp_id() ; 
       new_addr_type RFC_addr= RFC->EJ_build_addr( reg , warp_id ) ; 
       unsigned idx ;  
    //
-      if ( RFC -> EJ_probe( RFC_addr , idx ) == HIT ){
-          RFC->EJ_access( RFC_addr , idx ) ; 
+      //EJ_LOG
+      printf("[WRITEBACK] reg = %d  , wid = %d \n " , reg , warp_id ) ; 
+      printf("[WRITEBACK] addr = %d \n " , (int)RFC_addr ) ; 
+      enum cache_request_status status = RFC -> EJ_probe( RFC_addr , idx );  
+      printf("[WRITEBACK] status = %d , idx = %d \n " , status , idx ) ; 
+      //if ( RFC -> EJ_probe( RFC_addr , idx ) == HIT ){
+      if ( status == HIT ){
+          assert( RFC->EJ_access( RFC_addr , idx ) == HIT ) ; 
+          //RFC->EJ_access( RFC_addr , idx ) ; 
    //       // EJ_access -> probe -> update FIFO/LRU and return MISS/HIT 
    //       // good ; 
       }else{
-            assert( RFC -> EJ_probe ( RFC_addr , idx ) == MISS) ;
+            //assert( RFC -> EJ_probe ( RFC_addr , idx ) == MISS) ;
+            assert( status == MISS ) ;
    //
           if( RFC -> EJ_check_validation( idx ) != INVALID ){
               unsigned old_inst_warpid  = RFC->EJ_get_inst_warpid_from_RFC( idx ) ; 
@@ -3017,8 +3035,8 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
    // 5. if false:
    //       write results to RFC.
    //   
-   /*
-   for( r=regs.begin(); r!=regs.end();r++,n++ ) { // for all register to be written 
+   
+/*   for( r=regs.begin(); r!=regs.end();r++,n++ ) { // for all register to be written 
       unsigned reg = *r;
       unsigned bank = register_bank(reg,inst.warp_id(),m_num_banks,m_bank_warp_shift);
       if( m_arbiter.bank_idle(bank) ) {
@@ -3099,7 +3117,8 @@ void opndcoll_rfu_t::allocate_cu( unsigned port_num )
                      //     assert( m_RFC->probe(cu) == MISS) ; 
                      //     m_arbiter.add_read_requests(cu);     // send request to arbiter 
                      // }    
-                     m_arbiter.add_read_requests(cu);     // send request to arbiter 
+                     m_arbiter.add_read_RFC_requests(cu , m_RFC );     // send request to arbiter 
+                     //m_arbiter.add_read_requests(cu );     // send request to arbiter 
                      break;
                   }
               }
@@ -3116,7 +3135,8 @@ void opndcoll_rfu_t::allocate_reads()
    // process RFC requests 
    // 1. get a set of requests 
    std::list<op_t> RFC_allocated = m_arbiter.m_RFC_queue ;  
-   register_file_cache* RFC = shader_core()->m_RFC  ; 
+   //register_file_cache* RFC = shader_core()->m_RFC  ; 
+   register_file_cache* RFC = m_RFC  ; 
    // 2. Access to RFC  
    for( std::list<op_t>::iterator r=RFC_allocated.begin(); r!=RFC_allocated.end(); r++ ) {
       const op_t &rfc_rr = *r ;  
@@ -3125,7 +3145,14 @@ void opndcoll_rfu_t::allocate_reads()
       new_addr_type addr = RFC->EJ_build_addr( reg , wid ) ; 
       unsigned idx ; 
    // it must be hit !! 
-      assert( RFC -> EJ_access( addr , idx ) == HIT) ; 
+      //EJ_LOG
+      printf("[ALLOC_READ] reg = %d , wid = %d \n " , reg , wid ) ; 
+      printf("[ALLOC_READ] addr = %d \n " , (int)addr ) ; 
+      enum cache_request_status status = RFC -> EJ_probe( addr , idx );  
+      printf("[ALLOC_READ] status = %d , idx = %d \n " , status , idx ) ; 
+      //assert( RFC -> EJ_access( addr , idx ) == HIT) ; 
+      assert( status  == HIT) ;
+      // if( status == MISS )  // been written by Writeback Stage 
       // Not sure what it means 
       unsigned cu = rfc_rr.get_oc_id();
       unsigned operand = rfc_rr.get_operand();

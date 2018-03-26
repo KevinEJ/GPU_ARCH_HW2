@@ -219,7 +219,7 @@ void shader_core_config::reg_options(class OptionParser * opp)
     option_parser_register(opp, "-gpgpu_cache:RFC", OPT_CSTR, &m_RFC_config.m_config_string, 
                    "shader Register file cache config "
                    " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_alloc>,<mshr>:<N>:<merge>,<mq>} ",
-                   "4:256:1,L:R:m:N,A:2:32,6" );
+                   "none" );
     //EJ END
     option_parser_register(opp, "-gpgpu_cache:dl1", OPT_CSTR, &m_L1D_config.m_config_string,
                    "per-shader L1 data cache config "

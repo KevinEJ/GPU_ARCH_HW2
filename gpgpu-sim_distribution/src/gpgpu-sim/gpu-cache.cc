@@ -1022,7 +1022,12 @@ read_only_cache::access( new_addr_type addr,
 // Return MISS ; 
 enum cache_request_status 
 register_file_cache::EJ_probe( new_addr_type addr , unsigned& idx ){
+    
+    //EJ_LOG
+    //printf("[EJ_PROBE] addr = %d \n" , addr ) ; 
+
     enum cache_request_status status = m_tag_array->probe(addr,idx);
+    //printf("[EJ_PROBE] status = %d \n" , status ) ; 
     return status ; 
 }
 enum cache_request_status 
@@ -1047,7 +1052,13 @@ register_file_cache::EJ_access( new_addr_type addr , unsigned& idx )
     // 2. m_tag_array->probe( warp_id , tag , idx ) ;
     // 3. update LRU status.
     //enum cache_request_status status = m_tag_array->probe(addr,idx);
+    
+    //EJ_LOG
+    //printf("[EJ_ACCESS] addr = %d \n" , addr ) ; 
+    
     enum cache_request_status status = m_tag_array->probe(addr,idx);
+    
+    //printf("[EJ_ACCESS] status = %d \n" , status ) ; 
     if( status == HIT ){
         return m_tag_array->access(addr,0,idx) ; 
     }else{
@@ -1062,8 +1073,17 @@ register_file_cache::EJ_access( new_addr_type addr , unsigned& idx )
 //void register_file_cache::fill( mem_fetch *mf, unsigned time ){
 void register_file_cache::EJ_fill( new_addr_type addr , const warp_inst_t &inst ){
     // 1. it must be MISS and can do fill now 
-      unsigned idx ; 
+    
+    //EJ_LOG
+    //printf("[EJ_FILL] addr = %d \n" , addr ) ; 
+    unsigned idx ; 
+    enum cache_request_status status = m_tag_array->probe(addr,idx);
+    //printf("[EJ_FILL] status = %d \n" , status ) ; 
+    //assert( EJ_probe( addr , idx ) == MISS ) ; 
+    assert( status  == MISS ) ; 
+      
       m_tag_array->access( addr , 0 , idx )   ;  
+      m_tag_array->fill(  idx , 0 )   ;  
       m_old_addrs[idx] = addr ; 
       m_old_insts[idx] = inst ; 
     //

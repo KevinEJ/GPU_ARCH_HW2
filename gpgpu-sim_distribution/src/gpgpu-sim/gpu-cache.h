@@ -149,10 +149,10 @@ public:
 
 
         int ntok = sscanf(config,"%u:%u:%u,%c:%c:%c:%c:%c,%c:%u:%u,%u:%u,%u",
-                          &m_nset, &m_line_sz, &m_assoc, &rp, &wp, &ap, &wap,
-                          &sif,&mshr_type,&m_mshr_entries,&m_mshr_max_merge,
-                          &m_miss_queue_size, &m_result_fifo_entries,
-                          &m_data_port_width);
+                                  &m_nset   , &m_line_sz            , &m_assoc, 
+                                  &rp       , &wp                   , &ap     , &wap  , &sif, 
+                                  &mshr_type, &m_mshr_entries       ,&m_mshr_max_merge,
+                          &m_miss_queue_size, &m_result_fifo_entries,&m_data_port_width);
 
         if ( ntok < 11 ) {
             if ( !strcmp(config,"none") ) {
@@ -312,6 +312,8 @@ protected:
     friend class tag_array;
     friend class baseline_cache;
     friend class read_only_cache;
+    //EJ
+    //friend class register_file_cache;
     friend class tex_cache;
     friend class data_cache;
     friend class l1_cache;
@@ -727,28 +729,32 @@ public:
     : baseline_cache(name,config,core_id,type_id,memport,status) {
         m_old_addrs = new new_addr_type[ 4 * config.get_num_lines()]; 
         m_old_insts = new warp_inst_t[ 4 * config.get_num_lines()]; 
-        //m_old_addr = new new_addr_type[m_config->get_num_lines()/*array size*/] ; 
     }
     
-    enum cache_request_status EJ_probe( new_addr_type addr , unsigned& idx ) ; 
+    enum cache_request_status EJ_probe( new_addr_type addr , unsigned& idx );
     //determine whether the request hit and update the cahce block status/LRU information
     virtual enum cache_request_status access( new_addr_type addr, mem_fetch *mf, 
-                   unsigned time, std::list<cache_event> &events );
+                   unsigned time, std::list<cache_event> &events ){ 
+                   printf("[EEEJJJJ] this should not be issued \n") ; 
+                   return MISS ; } 
     enum cache_request_status EJ_access( new_addr_type addr , unsigned& idx );
     
     //locate the cache line to be eviceted and fill 
     //void fill( mem_fetch *mf, unsigned time );
     void EJ_fill( new_addr_type addr , const warp_inst_t& inst);
     new_addr_type EJ_build_addr(unsigned reg , unsigned warp_id ){
-        return ((new_addr_type)reg << 32 ) & ( warp_id ) ; 
+        //return ((new_addr_type)reg << 32 ) & ( warp_id ) ; 
+        return ( reg << 16 ) | ( warp_id ) ; 
     }
      
     unsigned EJ_get_inst_warpid_from_RFC( unsigned idx ){
-        return m_old_addrs[idx] % (  (new_addr_type)1 << 32 )  ; 
+        //return m_old_addrs[idx] % (  (new_addr_type)1 << 32 )  ; 
+        return m_old_addrs[idx] % ( 1 << 16 )  ; 
         //EJ TODO 
     }
     unsigned EJ_get_reg_from_RFC( unsigned idx ){
-        return ( m_old_addrs[idx]  >> 32 ) ; 
+        //return ( m_old_addrs[idx]  >> 32 ) ; 
+        return ( m_old_addrs[idx]  >> 16 ) ; 
     }  
     warp_inst_t EJ_get_inst_from_RFC( unsigned idx ){
         return ( m_old_insts[idx] ) ; 
