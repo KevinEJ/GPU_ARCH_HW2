@@ -736,12 +736,14 @@ public:
     virtual enum cache_request_status access( new_addr_type addr, mem_fetch *mf, 
                    unsigned time, std::list<cache_event> &events ){ 
                    printf("[EEEJJJJ] this should not be issued \n") ; 
+                   abort();
                    return MISS ; } 
     enum cache_request_status EJ_access( new_addr_type addr , unsigned& idx );
     
     //locate the cache line to be eviceted and fill 
     //void fill( mem_fetch *mf, unsigned time );
-    void EJ_fill( new_addr_type addr , const warp_inst_t& inst);
+    //void EJ_fill( new_addr_type addr , const warp_inst_t& inst);
+    void EJ_fill( new_addr_type addr ,unsigned reg, unsigned wid, const warp_inst_t& inst);
     new_addr_type EJ_build_addr(unsigned reg , unsigned warp_id ){
         //return ((new_addr_type)reg << 32 ) & ( warp_id ) ; 
         return ( reg << 16 ) | ( warp_id ) ; 

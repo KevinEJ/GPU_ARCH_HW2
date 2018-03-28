@@ -2542,7 +2542,7 @@ std::list<opndcoll_rfu_t::op_t> opndcoll_rfu_t::arbiter_t::allocate_reads()
          }
       }
    }
-
+    
    return result;
 }
 
@@ -2983,6 +2983,9 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
    std::list<unsigned>::iterator r;
    unsigned n=0;
    //EJ TODO
+   #if EJ_TEST
+   //EJ_LOG
+   //printf("[WRITEBACK] Start. \n " ) ; 
    //
    //register_file_cache* RFC = shader_core()->m_RFC  ; 
    register_file_cache* RFC = m_RFC  ; 
@@ -2991,13 +2994,13 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
       unsigned reg = *r;
       unsigned warp_id = inst.warp_id() ; 
       new_addr_type RFC_addr= RFC->EJ_build_addr( reg , warp_id ) ; 
-      unsigned idx ;  
+      unsigned idx = (unsigned)-1;  
    //
       //EJ_LOG
-      printf("[WRITEBACK] reg = %d  , wid = %d \n " , reg , warp_id ) ; 
-      printf("[WRITEBACK] addr = %d \n " , (int)RFC_addr ) ; 
+      //printf("[WRITEBACK] reg = %d  , wid = %d \n " , reg , warp_id ) ; 
+      //printf("[WRITEBACK] addr = %d \n " , (int)RFC_addr ) ; 
       enum cache_request_status status = RFC -> EJ_probe( RFC_addr , idx );  
-      printf("[WRITEBACK] status = %d , idx = %d \n " , status , idx ) ; 
+      //printf("[WRITEBACK] status = %d , idx = %d \n " , status , idx ) ; 
       //if ( RFC -> EJ_probe( RFC_addr , idx ) == HIT ){
       if ( status == HIT ){
           assert( RFC->EJ_access( RFC_addr , idx ) == HIT ) ; 
@@ -3011,18 +3014,22 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
           if( RFC -> EJ_check_validation( idx ) != INVALID ){
               unsigned old_inst_warpid  = RFC->EJ_get_inst_warpid_from_RFC( idx ) ; 
               unsigned old_reg          = RFC->EJ_get_reg_from_RFC( idx ) ; 
-              warp_inst_t old_inst      = RFC->EJ_get_inst_from_RFC( idx ) ; 
+              warp_inst_t *old_inst      = &RFC->EJ_get_inst_from_RFC( idx ) ; 
+              assert( old_inst->warp_id() == old_inst_warpid );
+              
               unsigned bank = register_bank( old_reg, old_inst_warpid, m_num_banks, m_bank_warp_shift);
    //       
               if( m_arbiter.bank_idle(bank) ) {    
-                  m_arbiter.allocate_bank_for_write(bank,op_t(&old_inst,old_reg,m_num_banks,m_bank_warp_shift));
-                  RFC -> EJ_fill( RFC_addr , inst ) ;        
+                  //STATS_ONLY
+                  m_arbiter.allocate_bank_for_write(bank,op_t(old_inst,old_reg,m_num_banks,m_bank_warp_shift));
+                  RFC -> EJ_fill( RFC_addr , reg , warp_id , inst ) ;        
               }else{
                   return false; 
               }
           }else{
               //First time writing 
-              RFC -> EJ_fill ( RFC_addr , inst ) ; 
+              RFC -> EJ_fill( RFC_addr , reg , warp_id , inst ) ;        
+              //RFC -> EJ_fill ( RFC_addr , inst ) ; 
           }
       }
    }
@@ -3034,9 +3041,9 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
    // 4.    if false: stall
    // 5. if false:
    //       write results to RFC.
-   //   
-   
-/*   for( r=regs.begin(); r!=regs.end();r++,n++ ) { // for all register to be written 
+   //STATS_ONLY
+   /*
+   for( r=regs.begin(); r!=regs.end();r++,n++ ) { // for all register to be written 
       unsigned reg = *r;
       unsigned bank = register_bank(reg,inst.warp_id(),m_num_banks,m_bank_warp_shift);
       if( m_arbiter.bank_idle(bank) ) {
@@ -3045,6 +3052,18 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
           return false;
       }
    }*/
+   //   
+   #else 
+   for( r=regs.begin(); r!=regs.end();r++,n++ ) { // for all register to be written 
+      unsigned reg = *r;
+      unsigned bank = register_bank(reg,inst.warp_id(),m_num_banks,m_bank_warp_shift);
+      if( m_arbiter.bank_idle(bank) ) {
+          m_arbiter.allocate_bank_for_write(bank,op_t(&inst,reg,m_num_banks,m_bank_warp_shift));
+      } else {
+          return false;
+      }
+   }
+   #endif
    for(unsigned i=0;i<(unsigned)regs.size();i++){   // for all registers to be written again 
 	      if(m_shader->get_config()->gpgpu_clock_gated_reg_file){
 	    	  unsigned active_count=0;
@@ -3117,8 +3136,13 @@ void opndcoll_rfu_t::allocate_cu( unsigned port_num )
                      //     assert( m_RFC->probe(cu) == MISS) ; 
                      //     m_arbiter.add_read_requests(cu);     // send request to arbiter 
                      // }    
-                     m_arbiter.add_read_RFC_requests(cu , m_RFC );     // send request to arbiter 
+                     #if EJ_TEST
+                     m_arbiter.add_read_RFC_requests(cu , m_RFC , m_num_banks , m_bank_warp_shift );     // send request to arbiter 
+                     //STATS_ONLY
                      //m_arbiter.add_read_requests(cu );     // send request to arbiter 
+                     #else
+                     m_arbiter.add_read_requests(cu );     // send request to arbiter 
+                     #endif
                      break;
                   }
               }
@@ -3132,6 +3156,9 @@ void opndcoll_rfu_t::allocate_cu( unsigned port_num )
 void opndcoll_rfu_t::allocate_reads()
 {
    // EJ TODO
+   #if EJ_TEST
+   //EJ_LOG
+   //printf("[ALLOC_READ] Start. \n " ) ; 
    // process RFC requests 
    // 1. get a set of requests 
    std::list<op_t> RFC_allocated = m_arbiter.m_RFC_queue ;  
@@ -3140,24 +3167,42 @@ void opndcoll_rfu_t::allocate_reads()
    // 2. Access to RFC  
    for( std::list<op_t>::iterator r=RFC_allocated.begin(); r!=RFC_allocated.end(); r++ ) {
       const op_t &rfc_rr = *r ;  
+      m_arbiter.m_RFC_queue.pop_front();
+
       unsigned reg = rfc_rr.get_reg();
       unsigned wid = rfc_rr.get_wid();
+      
+      unsigned bank = register_bank(reg,wid,m_num_banks,m_bank_warp_shift);
+      unsigned bank_1 = rfc_rr.get_bank();
+      assert( bank == bank_1 ) ; 
+      
       new_addr_type addr = RFC->EJ_build_addr( reg , wid ) ; 
-      unsigned idx ; 
+      unsigned idx = (unsigned)-1 ; 
    // it must be hit !! 
       //EJ_LOG
-      printf("[ALLOC_READ] reg = %d , wid = %d \n " , reg , wid ) ; 
-      printf("[ALLOC_READ] addr = %d \n " , (int)addr ) ; 
+      //printf("[ALLOC_READ] reg = %d , wid = %d \n " , reg , wid ) ; 
+      //printf("[ALLOC_READ] addr = %d \n " , (int)addr ) ; 
       enum cache_request_status status = RFC -> EJ_probe( addr , idx );  
-      printf("[ALLOC_READ] status = %d , idx = %d \n " , status , idx ) ; 
+      //printf("[ALLOC_READ] status = %d , idx = %d \n " , status , idx ) ; 
       //assert( RFC -> EJ_access( addr , idx ) == HIT) ; 
-      assert( status  == HIT) ;
-      // if( status == MISS )  // been written by Writeback Stage 
-      // Not sure what it means 
-      unsigned cu = rfc_rr.get_oc_id();
-      unsigned operand = rfc_rr.get_operand();
-      m_cu[cu]->collect_operand(operand);
+      //assert( status  == HIT) ;
+      // if it has been wirtten by writeback stage 
+      if( status == MISS ){
+        //STAT_ONLY
+        m_arbiter.EJ_readd_to_MRF_request( rfc_rr , m_num_banks , m_bank_warp_shift  ) ; 
+      }else if(status == HIT){
+        unsigned cu = rfc_rr.get_oc_id();
+        unsigned operand = rfc_rr.get_operand();
+        //STAT_ONLY
+        m_cu[cu]->collect_operand(operand);
+      }else{
+        abort() ; 
+      }
    }
+   //clear m_RFC_queue ; 
+   m_arbiter.m_RFC_queue.clear() ;  
+
+   #endif
    // 3. Get statsticitc information 
    //   n_RFC_access ++ ; 
    //   
@@ -3169,6 +3214,10 @@ void opndcoll_rfu_t::allocate_reads()
       unsigned reg = rr.get_reg();
       unsigned wid = rr.get_wid();
       unsigned bank = register_bank(reg,wid,m_num_banks,m_bank_warp_shift);
+      unsigned bank_1 = rr.get_bank();
+      assert( bank == bank_1 ) ; 
+      //EJ
+      assert( m_arbiter.bank_idle(bank) ) ; 
       m_arbiter.allocate_for_read(bank,rr);
       read_ops[bank] = rr;
    }

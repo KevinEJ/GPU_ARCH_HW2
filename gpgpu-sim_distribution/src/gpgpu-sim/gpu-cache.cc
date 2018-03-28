@@ -1071,19 +1071,21 @@ register_file_cache::EJ_access( new_addr_type addr , unsigned& idx )
 // is called when writeback
 // fill the tag_array with "warp id", "register number", "inst" 
 //void register_file_cache::fill( mem_fetch *mf, unsigned time ){
-void register_file_cache::EJ_fill( new_addr_type addr , const warp_inst_t &inst ){
+void register_file_cache::EJ_fill( new_addr_type addr, unsigned reg, unsigned wid,const warp_inst_t &inst ){
     // 1. it must be MISS and can do fill now 
     
     //EJ_LOG
     //printf("[EJ_FILL] addr = %d \n" , addr ) ; 
-    unsigned idx ; 
+    unsigned idx = (unsigned)-1; 
     enum cache_request_status status = m_tag_array->probe(addr,idx);
     //printf("[EJ_FILL] status = %d \n" , status ) ; 
     //assert( EJ_probe( addr , idx ) == MISS ) ; 
     assert( status  == MISS ) ; 
       
       m_tag_array->access( addr , 0 , idx )   ;  
-      m_tag_array->fill(  idx , 0 )   ;  
+      m_tag_array->fill(  idx , 0 )   ; 
+      new_addr_type check_addr = EJ_build_addr( reg ,wid ) ;
+      assert( check_addr == addr ) ; 
       m_old_addrs[idx] = addr ; 
       m_old_insts[idx] = inst ; 
     //

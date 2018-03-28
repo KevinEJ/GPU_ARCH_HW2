@@ -70,6 +70,8 @@
 
 #define WRITE_MASK_SIZE 8
 
+//EJ
+#define EJ_TEST 1
 
 class thread_ctx_t {
 public:
@@ -656,8 +658,10 @@ private:
       void alloc_read( const op_t &op )  { assert(is_free()); m_allocation=READ_ALLOC; m_op=op; }
       void alloc_write( const op_t &op ) { assert(is_free()); m_allocation=WRITE_ALLOC; m_op=op; }
       void reset() { m_allocation = NO_ALLOC; }
-   private:
+      
+      //EJ
       enum alloc_t m_allocation;
+   private:
       op_t m_op;
    };
 
@@ -717,36 +721,55 @@ private:
 
       // modifiers
       std::list<op_t> allocate_reads(); 
-    
+      
       //EJ TODO
-      void add_read_RFC_requests( collector_unit_t *cu , register_file_cache *RFC ){
+      void add_read_RFC_requests( collector_unit_t *cu , register_file_cache *RFC , unsigned m_num_banks, unsigned m_bank_warp_shift) {
           const op_t *src = cu->get_operands(); // an array of src op_ts
+          //EJ_LOG
+          //printf("[READ_RFC_REQs] Start. \n ") ; 
           for( unsigned i=0; i<MAX_REG_OPERANDS*2; i++) {  // for all src op_ts: push to the queue
               const op_t &op = src[i];
               if(  op.valid() ) {
                   unsigned reg = op.get_reg();
                   unsigned warp_id = op.get_wid() ;
+                  unsigned bank = register_bank(reg,warp_id,m_num_banks,m_bank_warp_shift);
+                  unsigned bank_1 = op.get_bank();
+                  assert( bank == bank_1 ) ; 
+                  
                   new_addr_type RFC_addr= RFC->EJ_build_addr( reg , warp_id ) ;
-                  unsigned idx ;
+                  unsigned idx = (unsigned)-1;
                   
                   //EJ_LOG
-                  printf("[READ_RFC_REQs] reg = %d , wid = %d \n " , reg , warp_id ) ; 
-                  printf("[READ_RFC_REQs] addr = %d \n " , (int)RFC_addr ) ; 
+                  //printf("[READ_RFC_REQs] reg = %d , wid = %d \n " , reg , warp_id ) ; 
+                  //printf("[READ_RFC_REQs] addr = %d \n " , (int)RFC_addr ) ; 
                   enum cache_request_status status = RFC -> EJ_probe( RFC_addr , idx );  
-                  printf("[READ_RFC_REQs] status = %d , idx = %d \n " , status , idx ) ; 
+                  //printf("[READ_RFC_REQs] status = %d , idx = %d \n " , status , idx ) ; 
                   //if( RFC -> EJ_probe( RFC_addr , idx  ) == HIT ){
                   if( status == HIT ){
-               //Check if op is in RFC or not 
+                      //Check if op is in RFC or not 
                       m_RFC_queue.push_back(op) ;  
                   }else{
                     assert( status == MISS ) ;
-                    unsigned bank = op.get_bank();   
+                    //STATS_ONLY
+                    //unsigned bank = op.get_bank();   
                     m_queue[bank].push_back(op);     //push op in m_queue[bank]
                   }
             }
          }
       }
-        
+      void EJ_readd_to_MRF_request( const op_t& op , unsigned m_num_banks, unsigned m_bank_warp_shift) {
+         if( op.valid() ) {
+            unsigned reg = op.get_reg();
+            unsigned warp_id = op.get_wid() ;
+            unsigned bank = register_bank(reg,warp_id,m_num_banks,m_bank_warp_shift);
+            unsigned bank_1 = op.get_bank();
+            assert( bank == bank_1 ) ; 
+            
+            //unsigned bank = op.get_bank();   
+            m_queue[bank].push_back(op);     //push op in m_queue[bank]
+         }
+      }
+
       void add_read_requests( collector_unit_t *cu ) 
       {
          const op_t *src = cu->get_operands(); // an array of src op_ts
@@ -770,6 +793,8 @@ private:
       void allocate_for_read( unsigned bank, const op_t &op )
       {
          assert( bank < m_num_banks );
+         //EJ_LOG
+         //printf("[ALLOC_for_READ] m_alloc = %d \n" , m_allocated_bank[bank].m_allocation ) ; 
          m_allocated_bank[bank].alloc_read(op);
       }
       void reset_alloction()
