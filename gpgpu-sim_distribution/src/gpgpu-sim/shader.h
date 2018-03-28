@@ -538,6 +538,15 @@ public:
 
    shader_core_ctx *shader_core() { return m_shader; }
    
+   //EJ_STATS
+   void print_RFC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_write_miss ,
+                 unsigned& cluster_stat_num_write_hit  ,
+                 unsigned& cluster_stat_num_evicted    ,
+                 unsigned& cluster_stat_num_read_miss  ,
+                 unsigned& cluster_stat_num_read_hit   ,
+                 unsigned& cluster_stat_num_MRF_read   ,
+                 unsigned& cluster_stat_num_MRF_write  ) ;
    //EJ
    register_file_cache* m_RFC; 
 private:
@@ -1680,6 +1689,15 @@ public:
     // accessors
     std::list<unsigned> get_regs_written( const inst_t &fvt ) const;
     const shader_core_config *get_config() const { return m_config; }
+    //EJ_STATS
+    void print_RFC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_write_miss ,
+                 unsigned& cluster_stat_num_write_hit  ,
+                 unsigned& cluster_stat_num_evicted    ,
+                 unsigned& cluster_stat_num_read_miss  ,
+                 unsigned& cluster_stat_num_read_hit   ,
+                 unsigned& cluster_stat_num_MRF_read   ,
+                 unsigned& cluster_stat_num_MRF_write  ) ;
     void print_cache_stats( FILE *fp, unsigned& dl1_accesses, unsigned& dl1_misses );
 
     void get_cache_stats(cache_stats &cs);
@@ -1934,6 +1952,16 @@ public:
     gpgpu_sim *get_gpu() { return m_gpu; }
 
     void display_pipeline( unsigned sid, FILE *fout, int print_mem, int mask );
+    
+    //EJ_STATS
+    void print_RFC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_write_miss ,
+                 unsigned& cluster_stat_num_write_hit  ,
+                 unsigned& cluster_stat_num_evicted    ,
+                 unsigned& cluster_stat_num_read_miss  ,
+                 unsigned& cluster_stat_num_read_hit   ,
+                 unsigned& cluster_stat_num_MRF_read   ,
+                 unsigned& cluster_stat_num_MRF_write  ) const ;
     void print_cache_stats( FILE *fp, unsigned& dl1_accesses, unsigned& dl1_misses ) const;
 
     void get_cache_stats(cache_stats &cs) const;

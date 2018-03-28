@@ -1016,6 +1016,36 @@ read_only_cache::access( new_addr_type addr,
 }
 
 //EJ TODO
+ 
+//EJ_STATS
+void register_file_cache::print_RFC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_write_miss ,
+                 unsigned& cluster_stat_num_write_hit  ,
+                 unsigned& cluster_stat_num_evicted    ,
+                 unsigned& cluster_stat_num_read_miss  ,
+                 unsigned& cluster_stat_num_read_hit   ,
+                 unsigned& cluster_stat_num_MRF_read   ,
+                 unsigned& cluster_stat_num_MRF_write  ){
+
+    fprintf( fp , "\n [EJ_RFC_PRINTING] \n" ) ; 
+    fprintf( fp , " m_stat_num_write_miss = %d  \n"  , m_stat_num_write_miss ) ; 
+    fprintf( fp , " m_stat_num_write_hit  = %d  \n"  , m_stat_num_write_hit  ) ; 
+    fprintf( fp , " m_stat_num_evicted    = %d  \n"  , m_stat_num_evicted    ) ; 
+    fprintf( fp , " m_stat_num_read_miss  = %d  \n"  , m_stat_num_read_miss  ) ; 
+    fprintf( fp , " m_stat_num_read_hit   = %d  \n"  , m_stat_num_read_hit   ) ; 
+    fprintf( fp , " m_stat_num_MRF_read   = %d  \n"  , m_stat_num_MRF_read   ) ; 
+    fprintf( fp , " m_stat_num_MRF_write  = %d  \n"  , m_stat_num_MRF_write  ) ; 
+    fprintf( fp , "\n [EJ_RFC_PRINTING_END] \n" ) ;  
+    
+    cluster_stat_num_write_miss += m_stat_num_write_miss ; 
+    cluster_stat_num_write_hit  += m_stat_num_write_hit ; 
+    cluster_stat_num_evicted    += m_stat_num_evicted ; 
+    cluster_stat_num_read_miss  += m_stat_num_read_miss ; 
+    cluster_stat_num_read_hit   += m_stat_num_read_hit ; 
+    cluster_stat_num_MRF_read   += m_stat_num_MRF_read ; 
+    cluster_stat_num_MRF_write  += m_stat_num_MRF_write ; 
+}
+
 // Access is called when cu wants to read data from RFC
 // Return HIT and update LRU status
 // or
@@ -1081,7 +1111,7 @@ void register_file_cache::EJ_fill( new_addr_type addr, unsigned reg, unsigned wi
     //printf("[EJ_FILL] status = %d \n" , status ) ; 
     //assert( EJ_probe( addr , idx ) == MISS ) ; 
     assert( status  == MISS ) ; 
-      
+   
       m_tag_array->access( addr , 0 , idx )   ;  
       m_tag_array->fill(  idx , 0 )   ; 
       new_addr_type check_addr = EJ_build_addr( reg ,wid ) ;

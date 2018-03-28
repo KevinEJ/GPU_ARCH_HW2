@@ -1179,6 +1179,26 @@ void shader_core_ctx::execute()
     }
 }
 
+//EJ_STATS
+void opndcoll_rfu_t::print_RFC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_write_miss ,
+                 unsigned& cluster_stat_num_write_hit  ,
+                 unsigned& cluster_stat_num_evicted    ,
+                 unsigned& cluster_stat_num_read_miss  ,
+                 unsigned& cluster_stat_num_read_hit   ,
+                 unsigned& cluster_stat_num_MRF_read   ,
+                 unsigned& cluster_stat_num_MRF_write  ) {
+   m_RFC->print_RFC_stats( fp, 
+                     cluster_stat_num_write_miss ,
+                     cluster_stat_num_write_hit  ,
+                     cluster_stat_num_evicted    ,
+                     cluster_stat_num_read_miss  ,
+                     cluster_stat_num_read_hit   ,
+                     cluster_stat_num_MRF_read   ,
+                     cluster_stat_num_MRF_write  ) ;  
+}
+
+
 void ldst_unit::print_cache_stats( FILE *fp, unsigned& dl1_accesses, unsigned& dl1_misses ) {
    if( m_L1D ) {
        m_L1D->print( fp, dl1_accesses, dl1_misses );
@@ -2091,6 +2111,57 @@ void gpgpu_sim::shader_print_cache_stats( FILE *fout ) const{
         fprintf(fout, "\tL1T_total_cache_reservation_fails = %u\n", total_css.res_fails);
     }
 }
+//EJ_STATS
+void gpgpu_sim::shader_print_RFC_stats( FILE *fout ) const
+{
+   unsigned total_stat_num_write_miss = 0  ; 
+   unsigned total_stat_num_write_hit  = 0  ; 
+   unsigned total_stat_num_evicted    = 0  ; 
+   unsigned total_stat_num_read_miss  = 0  ; 
+   unsigned total_stat_num_read_hit   = 0  ; 
+   unsigned total_stat_num_MRF_read   = 0  ; 
+   unsigned total_stat_num_MRF_write  = 0  ; 
+
+   for ( unsigned i = 0; i < m_shader_config->n_simt_clusters; ++i ) {
+        unsigned cluster_stat_num_write_miss = 0  ; 
+        unsigned cluster_stat_num_write_hit  = 0  ; 
+        unsigned cluster_stat_num_evicted    = 0  ; 
+        unsigned cluster_stat_num_read_miss  = 0  ; 
+        unsigned cluster_stat_num_read_hit   = 0  ; 
+        unsigned cluster_stat_num_MRF_read   = 0  ; 
+        unsigned cluster_stat_num_MRF_write  = 0  ; 
+
+        m_cluster[ i ]->print_RFC_stats( fout, 
+                     cluster_stat_num_write_miss ,
+                     cluster_stat_num_write_hit  ,
+                     cluster_stat_num_evicted    ,
+                     cluster_stat_num_read_miss  ,
+                     cluster_stat_num_read_hit   ,
+                     cluster_stat_num_MRF_read   ,
+                     cluster_stat_num_MRF_write  ) ;  
+        
+        total_stat_num_write_miss += cluster_stat_num_write_miss   ; 
+        total_stat_num_write_hit  += cluster_stat_num_write_hit    ; 
+        total_stat_num_evicted    += cluster_stat_num_evicted      ; 
+        total_stat_num_read_miss  += cluster_stat_num_read_miss    ; 
+        total_stat_num_read_hit   += cluster_stat_num_read_hit     ; 
+        total_stat_num_MRF_read   += cluster_stat_num_MRF_read     ; 
+        total_stat_num_MRF_write  += cluster_stat_num_MRF_write    ; 
+   }
+   fprintf( fout, "total_RFC_write_misses=%d\n", total_stat_num_write_miss );
+   fprintf( fout, "total_RFC_write_hits  =%d\n", total_stat_num_write_hit  );
+   fprintf( fout, "total_RFC_evicted     =%d\n", total_stat_num_evicted    );
+   fprintf( fout, "total_RFC_read_misses =%d\n", total_stat_num_read_miss  );
+   fprintf( fout, "total_RFC_read_hits   =%d\n", total_stat_num_read_hit   );
+   fprintf( fout, "total_MRF_reads       =%d\n", total_stat_num_MRF_read   );
+   fprintf( fout, "total_MRF_write       =%d\n", total_stat_num_MRF_write  );
+   fprintf( fout, "MRF_reads_avoids      =%f\n", 
+        (float)(total_stat_num_read_hit)/(float)(total_stat_num_read_miss + total_stat_num_read_hit) );
+   fprintf( fout, "MRF_wirte_avoids      =%f\n", 
+        (float)(total_stat_num_write_hit)/(float)(total_stat_num_write_miss + total_stat_num_write_hit) );
+   fprintf( fout, "MRF_access_avoids      =%f\n", 
+        (float)(total_stat_num_write_hit+total_stat_num_read_hit)/(float)(total_stat_num_write_miss + total_stat_num_write_hit+total_stat_num_read_miss+total_stat_num_read_hit ));
+}
 
 void gpgpu_sim::shader_print_l1_miss_stat( FILE *fout ) const
 {
@@ -2813,6 +2884,25 @@ void shader_core_ctx::store_ack( class mem_fetch *mf )
     m_warp[warp_id].dec_store_req();
 }
 
+//EJ_STATS
+void shader_core_ctx::print_RFC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_write_miss ,
+                 unsigned& cluster_stat_num_write_hit  ,
+                 unsigned& cluster_stat_num_evicted    ,
+                 unsigned& cluster_stat_num_read_miss  ,
+                 unsigned& cluster_stat_num_read_hit   ,
+                 unsigned& cluster_stat_num_MRF_read   ,
+                 unsigned& cluster_stat_num_MRF_write  ) {
+   m_operand_collector.print_RFC_stats( fp, 
+                     cluster_stat_num_write_miss ,
+                     cluster_stat_num_write_hit  ,
+                     cluster_stat_num_evicted    ,
+                     cluster_stat_num_read_miss  ,
+                     cluster_stat_num_read_hit   ,
+                     cluster_stat_num_MRF_read   ,
+                     cluster_stat_num_MRF_write  ) ;  
+}
+
 void shader_core_ctx::print_cache_stats( FILE *fp, unsigned& dl1_accesses, unsigned& dl1_misses ) {
    m_ldst_unit->print_cache_stats( fp, dl1_accesses, dl1_misses );
 }
@@ -2983,12 +3073,12 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
    std::list<unsigned>::iterator r;
    unsigned n=0;
    //EJ TODO
+   register_file_cache* RFC = m_RFC  ; 
    #if EJ_TEST
    //EJ_LOG
    //printf("[WRITEBACK] Start. \n " ) ; 
    //
    //register_file_cache* RFC = shader_core()->m_RFC  ; 
-   register_file_cache* RFC = m_RFC  ; 
    
    for( r=regs.begin(); r!=regs.end();r++,n++ ) { // for all register to be written 
       unsigned reg = *r;
@@ -3002,25 +3092,30 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
       enum cache_request_status status = RFC -> EJ_probe( RFC_addr , idx );  
       //printf("[WRITEBACK] status = %d , idx = %d \n " , status , idx ) ; 
       //if ( RFC -> EJ_probe( RFC_addr , idx ) == HIT ){
+      
       if ( status == HIT ){
           assert( RFC->EJ_access( RFC_addr , idx ) == HIT ) ; 
+          RFC->m_stat_num_write_hit ++ ; 
           //RFC->EJ_access( RFC_addr , idx ) ; 
    //       // EJ_access -> probe -> update FIFO/LRU and return MISS/HIT 
    //       // good ; 
       }else{
             //assert( RFC -> EJ_probe ( RFC_addr , idx ) == MISS) ;
-            assert( status == MISS ) ;
+          assert( status == MISS ) ;
+          RFC->m_stat_num_write_miss ++ ; 
    //
           if( RFC -> EJ_check_validation( idx ) != INVALID ){
               unsigned old_inst_warpid  = RFC->EJ_get_inst_warpid_from_RFC( idx ) ; 
               unsigned old_reg          = RFC->EJ_get_reg_from_RFC( idx ) ; 
-              warp_inst_t *old_inst      = &RFC->EJ_get_inst_from_RFC( idx ) ; 
+              warp_inst_t *old_inst      = RFC->EJ_get_inst_from_RFC( idx ) ; 
               assert( old_inst->warp_id() == old_inst_warpid );
               
               unsigned bank = register_bank( old_reg, old_inst_warpid, m_num_banks, m_bank_warp_shift);
-   //       
+   //          
               if( m_arbiter.bank_idle(bank) ) {    
                   //STATS_ONLY
+                  RFC -> m_stat_num_evicted ++ ; 
+                  RFC -> m_stat_num_MRF_write ++ ; 
                   m_arbiter.allocate_bank_for_write(bank,op_t(old_inst,old_reg,m_num_banks,m_bank_warp_shift));
                   RFC -> EJ_fill( RFC_addr , reg , warp_id , inst ) ;        
               }else{
@@ -3058,6 +3153,8 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
       unsigned reg = *r;
       unsigned bank = register_bank(reg,inst.warp_id(),m_num_banks,m_bank_warp_shift);
       if( m_arbiter.bank_idle(bank) ) {
+          //EJ
+          RFC -> m_stat_num_MRF_write ++ ; 
           m_arbiter.allocate_bank_for_write(bank,op_t(&inst,reg,m_num_banks,m_bank_warp_shift));
       } else {
           return false;
@@ -3156,6 +3253,7 @@ void opndcoll_rfu_t::allocate_cu( unsigned port_num )
 void opndcoll_rfu_t::allocate_reads()
 {
    // EJ TODO
+   register_file_cache* RFC = m_RFC  ; 
    #if EJ_TEST
    //EJ_LOG
    //printf("[ALLOC_READ] Start. \n " ) ; 
@@ -3163,7 +3261,6 @@ void opndcoll_rfu_t::allocate_reads()
    // 1. get a set of requests 
    std::list<op_t> RFC_allocated = m_arbiter.m_RFC_queue ;  
    //register_file_cache* RFC = shader_core()->m_RFC  ; 
-   register_file_cache* RFC = m_RFC  ; 
    // 2. Access to RFC  
    for( std::list<op_t>::iterator r=RFC_allocated.begin(); r!=RFC_allocated.end(); r++ ) {
       const op_t &rfc_rr = *r ;  
@@ -3191,6 +3288,8 @@ void opndcoll_rfu_t::allocate_reads()
         //STAT_ONLY
         m_arbiter.EJ_readd_to_MRF_request( rfc_rr , m_num_banks , m_bank_warp_shift  ) ; 
       }else if(status == HIT){
+      
+        RFC -> m_stat_num_read_hit ++ ; 
         unsigned cu = rfc_rr.get_oc_id();
         unsigned operand = rfc_rr.get_operand();
         //STAT_ONLY
@@ -3217,6 +3316,8 @@ void opndcoll_rfu_t::allocate_reads()
       unsigned bank_1 = rr.get_bank();
       assert( bank == bank_1 ) ; 
       //EJ
+      RFC -> m_stat_num_read_miss ++ ; 
+      RFC -> m_stat_num_MRF_read  ++ ; 
       assert( m_arbiter.bank_idle(bank) ) ; 
       m_arbiter.allocate_for_read(bank,rr);
       read_ops[bank] = rr;
@@ -3519,6 +3620,28 @@ void simt_core_cluster::display_pipeline( unsigned sid, FILE *fout, int print_me
         mf->print(fout);
     }
 }
+
+//EJ_STATS
+void simt_core_cluster::print_RFC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_write_miss ,
+                 unsigned& cluster_stat_num_write_hit  ,
+                 unsigned& cluster_stat_num_evicted    ,
+                 unsigned& cluster_stat_num_read_miss  ,
+                 unsigned& cluster_stat_num_read_hit   ,
+                 unsigned& cluster_stat_num_MRF_read   ,
+                 unsigned& cluster_stat_num_MRF_write  ) const {
+   for ( unsigned i = 0; i < m_config->n_simt_cores_per_cluster; ++i ) {
+        m_core[i]->print_RFC_stats( fp, 
+                     cluster_stat_num_write_miss ,
+                     cluster_stat_num_write_hit  ,
+                     cluster_stat_num_evicted    ,
+                     cluster_stat_num_read_miss  ,
+                     cluster_stat_num_read_hit   ,
+                     cluster_stat_num_MRF_read   ,
+                     cluster_stat_num_MRF_write  ) ;  
+   }
+}
+
 
 void simt_core_cluster::print_cache_stats( FILE *fp, unsigned& dl1_accesses, unsigned& dl1_misses ) const {
    for ( unsigned i = 0; i < m_config->n_simt_cores_per_cluster; ++i ) {

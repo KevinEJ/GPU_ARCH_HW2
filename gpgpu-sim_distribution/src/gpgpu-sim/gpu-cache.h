@@ -729,6 +729,13 @@ public:
     : baseline_cache(name,config,core_id,type_id,memport,status) {
         m_old_addrs = new new_addr_type[ 4 * config.get_num_lines()]; 
         m_old_insts = new warp_inst_t[ 4 * config.get_num_lines()]; 
+        m_stat_num_write_miss = 0   ; 
+        m_stat_num_write_hit  = 0   ; 
+        m_stat_num_evicted    = 0   ; 
+        m_stat_num_read_miss  = 0   ; 
+        m_stat_num_read_hit   = 0   ; 
+        m_stat_num_MRF_read   = 0   ; 
+        m_stat_num_MRF_write  = 0   ; 
     }
     
     enum cache_request_status EJ_probe( new_addr_type addr , unsigned& idx );
@@ -758,8 +765,8 @@ public:
         //return ( m_old_addrs[idx]  >> 32 ) ; 
         return ( m_old_addrs[idx]  >> 16 ) ; 
     }  
-    warp_inst_t EJ_get_inst_from_RFC( unsigned idx ){
-        return ( m_old_insts[idx] ) ; 
+    warp_inst_t* EJ_get_inst_from_RFC( unsigned idx ){
+        return ( &m_old_insts[idx] ) ; 
     }  
     cache_block_state EJ_check_validation( unsigned idx ){
         return m_tag_array -> m_lines[idx].m_status ;  
@@ -769,6 +776,24 @@ public:
 
     new_addr_type* m_old_addrs ; 
     warp_inst_t* m_old_insts ; 
+
+    //EJ_STATS
+    void print_RFC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_write_miss ,
+                 unsigned& cluster_stat_num_write_hit  ,
+                 unsigned& cluster_stat_num_evicted    ,
+                 unsigned& cluster_stat_num_read_miss  ,
+                 unsigned& cluster_stat_num_read_hit   ,
+                 unsigned& cluster_stat_num_MRF_read   ,
+                 unsigned& cluster_stat_num_MRF_write  ) ; 
+    
+    unsigned m_stat_num_write_miss   ; 
+    unsigned m_stat_num_write_hit    ; 
+    unsigned m_stat_num_evicted      ; 
+    unsigned m_stat_num_read_miss    ; 
+    unsigned m_stat_num_read_hit     ; 
+    unsigned m_stat_num_MRF_read     ; 
+    unsigned m_stat_num_MRF_write    ; 
 
     protected:
     register_file_cache( const char *name, cache_config &config, int core_id, int type_id, mem_fetch_interface *memport, enum mem_fetch_status status, tag_array* new_tag_array )

@@ -914,7 +914,9 @@ void gpgpu_sim::gpu_print_stat()
 
    //shader_print_l1_miss_stat( stdout );
    shader_print_cache_stats(stdout);
-
+   //EJ_STATS
+   shader_print_RFC_stats(stdout);
+   
    cache_stats core_cache_stats;
    core_cache_stats.clear();
    for(unsigned i=0; i<m_config.num_cluster(); i++){
