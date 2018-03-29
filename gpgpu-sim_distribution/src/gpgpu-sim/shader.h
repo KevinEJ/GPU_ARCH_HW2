@@ -71,7 +71,7 @@
 #define WRITE_MASK_SIZE 8
 
 //EJ
-#define EJ_TEST 1
+#define EJ_TEST 0
 
 class thread_ctx_t {
 public:
@@ -1351,7 +1351,8 @@ struct shader_core_config : public core_config
     mutable l1d_cache_config m_L1D_config;
     //EJ TODO
     mutable cache_config m_RFC_config;
-    
+    unsigned m_RFC_open ; 
+
     bool gmem_skip_L1D; // on = global memory access always skip the L1 cache 
     
     bool gpgpu_dwf_reg_bankconflict;
