@@ -49,7 +49,8 @@ enum cache_request_status {
     HIT_RESERVED,
     MISS,
     RESERVATION_FAIL, 
-    NUM_CACHE_REQUEST_STATUS
+    NUM_CACHE_REQUEST_STATUS,
+    FC_FAIL//EJ FC
 };
 
 enum cache_event {
@@ -69,6 +70,8 @@ struct cache_block_t {
         m_fill_time=0;
         m_last_access_time=0;
         m_status=INVALID;
+        //EJ FC 
+        m_num_active_warp = 0  ; 
     }
     void allocate( new_addr_type tag, new_addr_type block_addr, unsigned time )
     {
@@ -92,11 +95,16 @@ struct cache_block_t {
     unsigned         m_last_access_time;
     unsigned         m_fill_time;
     cache_block_state    m_status;
+    //EJ FC structure
+    bool valid_to_evicted(){ return m_num_active_warp == 0 ; }   
+    unsigned         m_num_active_warp ; 
 };
 
 enum replacement_policy_t {
     LRU,
-    FIFO
+    FIFO,// EJ_FC
+    FC_LRU,
+    FC_FIFO
 };
 
 enum write_policy_t {
@@ -164,6 +172,8 @@ public:
         switch (rp) {
         case 'L': m_replacement_policy = LRU; break;
         case 'F': m_replacement_policy = FIFO; break;
+        case 'C': m_replacement_policy = FC_LRU; break;
+        case 'D': m_replacement_policy = FC_FIFO; break;
         default: exit_parse_error();
         }
         switch (wp) {
@@ -271,6 +281,7 @@ public:
     char *m_config_stringPrefShared;
     FuncCache cache_status;
 
+    enum replacement_policy_t m_replacement_policy; // 'L' = LRU, 'F' = FIFO
 protected:
     void exit_parse_error()
     {
@@ -286,7 +297,6 @@ protected:
     unsigned m_nset_log2;
     unsigned m_assoc;
 
-    enum replacement_policy_t m_replacement_policy; // 'L' = LRU, 'F' = FIFO
     enum write_policy_t m_write_policy;             // 'T' = write through, 'B' = write back, 'R' = read only
     enum allocation_policy_t m_alloc_policy;        // 'm' = allocate on miss, 'f' = allocate on fill
     enum mshr_config_t m_mshr_type;
@@ -363,6 +373,20 @@ public:
     
     cache_config &m_config;
     cache_block_t *m_lines; /* nbanks x nset x assoc lines in total */
+
+    //EJ FC
+    //
+    void EJ_update_num_active_warp(unsigned idx , unsigned check ){
+        //printf("[FC] active_warp++ : check = %d , count = %d \n" , check , m_lines[idx].m_num_active_warp ) ;  
+        assert( check == m_lines[idx].m_num_active_warp ) ; 
+        m_lines[idx].m_num_active_warp++ ; 
+    } 
+    void EJ_decr_num_active_warp(unsigned idx , unsigned check ){ 
+        //printf("[FC] active_warp-- : check = %d , count = %d \n" , check , m_lines[idx].m_num_active_warp ) ;  
+        assert( check == m_lines[idx].m_num_active_warp ) ; 
+        m_lines[idx].m_num_active_warp-- ; 
+    } 
+
 protected:
     // This constructor is intended for use only from derived classes that wish to
     // avoid unnecessary memory allocation that takes place in the
@@ -720,7 +744,83 @@ protected:
     : baseline_cache(name,config,core_id,type_id,memport,status, new_tag_array){}
 };
 
-//EJ TODO 
+class filter_cache : public baseline_cache {
+    public:
+    filter_cache( const char *name, cache_config &config, 
+                         int core_id, int type_id, mem_fetch_interface *memport, 
+                         enum mem_fetch_status status )
+    : baseline_cache(name,config,core_id,type_id,memport,status) {
+        m_num_lines = config.get_num_lines() ; 
+        m_warp_id = new unsigned[ 4 * m_num_lines]; 
+        m_warp_id_array = new unsigned*[ 4 * m_num_lines ]; 
+        for( unsigned i = 0 ; i < 4 * m_num_lines ; i++){
+            m_warp_id_array[i] = new unsigned[48] ; 
+        }
+        
+        m_slot    = new unsigned[ 4 * m_num_lines]; 
+        m_inst    = new const warp_inst_t*[ 4 * m_num_lines]; 
+        
+        for( unsigned i = 0 ; i < 4 * m_num_lines ; i++){
+            m_slot[i] = (unsigned)-1 ; 
+            //m_inst[i] = (unsigned)-1 ; 
+            for( unsigned w = 0 ; w < 48 ; w++){
+                m_warp_id_array[i][w] = 0 ; 
+            }
+        }
+        
+        m_stat_num_miss = 0   ; 
+        m_stat_num_hit  = 0   ; 
+        m_FC_FAIL       = 0   ;
+    }
+    enum cache_request_status EJ_probe( new_addr_type addr , unsigned& idx );
+    enum cache_request_status EJ_access( new_addr_type addr , unsigned& idx , unsigned wid, unsigned time);
+    void EJ_fill( new_addr_type addr , unsigned wid , unsigned slot, const warp_inst_t& inst , unsigned time);
+    // FC only functions.
+    void EJ_dec_warplist( const warp_inst_t* inst , unsigned wid ); 
+    //void EJ_fill_FConly( new_addr_type addr , unsigned wid , unsigned slot, const warp_inst_t& inst , unsigned time);
+    //void EJ_update_active_warpid( new_addr_type addr , unsigned wid) ; 
+    // IB only functions.
+    unsigned EJ_active_warp(unsigned idx){
+        unsigned count = 0 ; 
+        for( unsigned w = 0 ; w < 48 ; w++){
+            if( m_warp_id_array[idx][w] == 1 )
+                count ++ ; 
+        }
+        return count ;
+    }
+
+    virtual ~filter_cache(){} 
+
+    unsigned     m_num_lines; 
+    unsigned*    m_warp_id ; 
+    unsigned**   m_warp_id_array ; 
+    unsigned*    m_slot ; 
+    const warp_inst_t** m_inst ; 
+    
+    //STAT
+    //EJ_STATS
+    void print_FC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_miss ,
+                 unsigned& cluster_stat_num_hit  , 
+                 unsigned& cluster_stat_num_FCFail  ) ; 
+    unsigned m_stat_num_miss   ; 
+    unsigned m_stat_num_hit    ; 
+    unsigned m_FC_FAIL         ; 
+
+    //useless
+    virtual enum cache_request_status access( new_addr_type addr, mem_fetch *mf, 
+                   unsigned time, std::list<cache_event> &events ){ 
+                   printf("[EEEJJJJ] this should not be issued \n") ; 
+                   abort();
+                   return MISS ; } 
+    protected:
+    filter_cache(const char *name,cache_config &config,int core_id, int type_id, mem_fetch_interface *memport, enum mem_fetch_status status, tag_array* new_tag_array )
+    : baseline_cache(name,config,core_id,type_id,memport,status, new_tag_array){}
+
+};
+
+
+//EJ RFC TODO 
 class register_file_cache : public baseline_cache {
 public:
     register_file_cache( const char *name, cache_config &config, 
@@ -745,12 +845,12 @@ public:
                    printf("[EEEJJJJ] this should not be issued \n") ; 
                    abort();
                    return MISS ; } 
-    enum cache_request_status EJ_access( new_addr_type addr , unsigned& idx );
+    enum cache_request_status EJ_access( new_addr_type addr , unsigned& idx , unsigned time);
     
     //locate the cache line to be eviceted and fill 
     //void fill( mem_fetch *mf, unsigned time );
     //void EJ_fill( new_addr_type addr , const warp_inst_t& inst);
-    void EJ_fill( new_addr_type addr ,unsigned reg, unsigned wid, const warp_inst_t& inst);
+    void EJ_fill( new_addr_type addr ,unsigned reg, unsigned wid, const warp_inst_t& inst , unsigned time);
     new_addr_type EJ_build_addr(unsigned reg , unsigned warp_id ){
         //return ((new_addr_type)reg << 32 ) & ( warp_id ) ; 
         return ( reg << 16 ) | ( warp_id ) ; 

@@ -214,7 +214,7 @@ void shader_core_config::reg_options(class OptionParser * opp)
                    "shader L1 instruction cache config "
                    " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_alloc>,<mshr>:<N>:<merge>,<mq>} ",
                    "4:256:4,L:R:f:N,A:2:32,4" );
-    //EJ TODO
+    //EJ RFC TODO
     option_parser_register(opp, "-gpgpu_cache_RFC_open", OPT_BOOL , &m_RFC_open, 
                    "shader Register file cache switch "
                    "{ 0 , 1 }",
@@ -224,6 +224,23 @@ void shader_core_config::reg_options(class OptionParser * opp)
                    " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_alloc>,<mshr>:<N>:<merge>,<mq>} ",
                    "none" );
     //EJ END
+    //EJ FC TODO
+    option_parser_register(opp, "-gpgpu_cache_FC_mode", OPT_UINT32 , &m_FC_mode, 
+                   "shader Register file cache switch "
+                   "{ 0 , 1 }",
+                   "0" ) ; 
+    option_parser_register(opp, "-gpgpu_cache:FC", OPT_CSTR, &m_FC_config.m_config_string, 
+                   "shader Register file cache config "
+                   " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_alloc>,<mshr>:<N>:<merge>,<mq>} ",
+                   "none" );
+    //EJ END
+    //EJ BuddySM TODO
+    option_parser_register(opp, "-gpgpu_BuddySM:open", OPT_BOOL, &m_Buddy_open, 
+                   "shader Buddy SM switch  "
+                   " { 0 , 1 } ",
+                   "0" );
+    //EJ END
+    
     option_parser_register(opp, "-gpgpu_cache:dl1", OPT_CSTR, &m_L1D_config.m_config_string,
                    "per-shader L1 data cache config "
                    " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_alloc>,<mshr>:<N>:<merge>,<mq> | none}",
@@ -919,7 +936,9 @@ void gpgpu_sim::gpu_print_stat()
    shader_print_cache_stats(stdout);
    //EJ_STATS
    shader_print_RFC_stats(stdout);
-   
+   shader_print_FC_stats(stdout);
+   shader_print_BuddySM_stats(stdout);
+
    cache_stats core_cache_stats;
    core_cache_stats.clear();
    for(unsigned i=0; i<m_config.num_cluster(); i++){
@@ -1108,6 +1127,7 @@ void shader_core_ctx::issue_block2core( kernel_info_t &kernel )
     m_barriers.allocate_barrier(free_cta_hw_id,warps);
 
     // initialize the SIMT stacks and fetch hardware
+    printf("[issue_block2core] init_warps cluster:%d core:%d \n" , m_sid , m_cluster->m_cluster_id ) ; 
     init_warps( free_cta_hw_id, start_thread, end_thread);
     m_n_active_cta++;
 

@@ -167,6 +167,7 @@ enum cache_request_status tag_array::probe( new_addr_type addr, unsigned &idx ) 
     bool all_reserved = true;
 
     // check for hit or pending hit
+    //printf("[TAG_ARRAY] \n" );
     for (unsigned way=0; way<m_config.m_assoc; way++) {
         unsigned index = set_index*m_config.m_assoc+way;
         cache_block_t *line = &m_lines[index];
@@ -200,6 +201,25 @@ enum cache_request_status tag_array::probe( new_addr_type addr, unsigned &idx ) 
                         valid_timestamp = line->m_alloc_time;
                         valid_line = index;
                     }
+                }/*EJ FC Cache FConly */ else if ( m_config.m_replacement_policy == FC_LRU){
+                    //printf("[TAG_ARRAY] active_warp_num[%d]  %d \n", index , line -> m_num_active_warp );
+                    if ( line -> valid_to_evicted() ){
+                        if ( line->m_last_access_time < valid_timestamp ) {
+                            valid_timestamp = line->m_last_access_time;
+                            valid_line = index;
+                        }
+                    }
+                }/*EJ FC Cache FConly */ else if ( m_config.m_replacement_policy == FC_FIFO){
+                    //printf("[TAG_ARRAY] active_warp_num[%d]  %d \n", index , line -> m_num_active_warp );
+                    if ( line -> valid_to_evicted() ){
+                        if ( line->m_last_access_time < valid_timestamp ) {
+                            valid_timestamp = line->m_last_access_time;
+                            valid_line = index;
+                        }
+                    }
+                }else{
+                    printf("[TAG_ARRAY] replacement policy fails \n");
+                    abort(); 
                 }
             }
         }
@@ -213,8 +233,11 @@ enum cache_request_status tag_array::probe( new_addr_type addr, unsigned &idx ) 
         idx = invalid_line;
     } else if ( valid_line != (unsigned)-1) {
         idx = valid_line;
-    } else abort(); // if an unreserved block exists, it is either invalid or replaceable 
-
+    }else{
+        if ( m_config.m_replacement_policy == FC_FIFO || m_config.m_replacement_policy == FC_LRU )
+            return FC_FAIL ; 
+        abort(); // if an unreserved block exists, it is either invalid or replaceable 
+    }
     return MISS;
 }
 
@@ -1015,8 +1038,86 @@ read_only_cache::access( new_addr_type addr,
     return cache_status;
 }
 
-//EJ TODO
- 
+//EJ FC TODO
+enum cache_request_status 
+filter_cache::EJ_probe( new_addr_type addr , unsigned& idx ){
+    enum cache_request_status status = m_tag_array->probe(addr,idx);
+    return status ; 
+}
+
+enum cache_request_status 
+filter_cache::EJ_access( new_addr_type addr , unsigned& idx , unsigned wid ,  unsigned time){
+    enum cache_request_status status = m_tag_array->probe(addr,idx);
+    assert( status == HIT);
+    m_stat_num_hit ++ ; 
+    //printf("[EJ_ACCESS] status = %d \n" , status ) ; 
+    m_tag_array -> access( addr , time , idx ) ; 
+    
+    if ( m_config.m_replacement_policy == FC_LRU || m_config.m_replacement_policy == FC_FIFO ){
+        assert( m_warp_id_array[idx][wid] == 0 ) ;
+        unsigned check = EJ_active_warp(idx) ; 
+    //printf("[ACCESS] idx = %d , wid = %d , inst = %x , check = %d \n" , idx , wid , m_inst[idx], check ) ; 
+        m_tag_array -> EJ_update_num_active_warp( idx , check ) ; 
+        m_warp_id_array[idx][wid] = 1 ; 
+    }
+    return status ; 
+}
+
+void filter_cache::EJ_fill( new_addr_type addr , unsigned wid , unsigned slot, const warp_inst_t& inst , unsigned time){
+    unsigned idx = (unsigned)-1; 
+    enum cache_request_status status = m_tag_array->probe(addr,idx);
+    assert( status  == MISS ) ; 
+    m_stat_num_miss ++ ; 
+    
+    m_tag_array->access( addr , time , idx )   ;  
+    m_tag_array->fill(  idx , time )   ; 
+    
+    m_warp_id[idx] = wid ; 
+    m_slot[idx] = slot   ; 
+    m_inst[idx] = &inst   ; 
+    if ( m_config.m_replacement_policy == FC_LRU || m_config.m_replacement_policy == FC_FIFO ){
+        assert( m_warp_id_array[idx][wid] == 0 ) ;
+    //printf("[FILL] idx = %d , wid = %d , inst = %x \n" , idx , wid , &inst ) ; 
+    //printf("[FILL] idx = %d , wid = %d , inst = %x \n" , idx , wid , (m_inst[idx]) ) ; 
+        m_tag_array -> EJ_update_num_active_warp( idx , EJ_active_warp(idx) ) ; 
+        m_warp_id_array[idx][wid] = 1 ; 
+    }
+}
+void filter_cache::EJ_dec_warplist( const warp_inst_t* inst , unsigned wid ){
+if ( m_config.m_replacement_policy == FC_LRU || m_config.m_replacement_policy == FC_FIFO ){
+    unsigned idx ;
+    bool check = false ; 
+    //printf("[dec_warplist] %x" , inst ) ; 
+    for( unsigned i = 0 ; i < 4 * m_num_lines ; i++){
+        if( m_inst[i] == inst && inst != NULL ){
+            assert( check == false ) ; 
+            check = true ; 
+            idx = i ;  
+            //printf("[REMOVE] idx = %d , wid = %d \n" , idx , wid ) ; 
+                assert( m_warp_id_array[idx][wid] == 1 ) ;
+                m_tag_array -> EJ_decr_num_active_warp( idx , EJ_active_warp(idx) ) ; 
+                m_warp_id_array[idx][wid] = 0 ;
+            //break ; 
+        }
+    }
+}
+} 
+
+void filter_cache::print_FC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_miss ,
+                 unsigned& cluster_stat_num_hit  ,
+                 unsigned& cluster_stat_num_FCFail  ){
+                 
+    //fprintf( fp , "\n [EJ_FC_PRINTING] \n" ) ; 
+    //fprintf( fp , " m_stat_num_miss = %d  \n"  , m_stat_num_miss ) ; 
+    //fprintf( fp , " m_stat_num_hit  = %d  \n"  , m_stat_num_hit  ) ; 
+    //fprintf( fp , "\n [EJ_FC_PRINTING_END] \n" ) ;  
+    cluster_stat_num_miss += m_stat_num_miss ; 
+    cluster_stat_num_hit  += m_stat_num_hit ; 
+    cluster_stat_num_FCFail  += m_FC_FAIL ; 
+} 
+
+//EJ RFC TODO 
 //EJ_STATS
 void register_file_cache::print_RFC_stats( FILE *fp, 
                  unsigned& cluster_stat_num_write_miss ,
@@ -1027,7 +1128,7 @@ void register_file_cache::print_RFC_stats( FILE *fp,
                  unsigned& cluster_stat_num_MRF_read   ,
                  unsigned& cluster_stat_num_MRF_write  ){
 
-    fprintf( fp , "\n [EJ_RFC_PRINTING] \n" ) ; 
+    /*fprintf( fp , "\n [EJ_RFC_PRINTING] \n" ) ; 
     fprintf( fp , " m_stat_num_write_miss = %d  \n"  , m_stat_num_write_miss ) ; 
     fprintf( fp , " m_stat_num_write_hit  = %d  \n"  , m_stat_num_write_hit  ) ; 
     fprintf( fp , " m_stat_num_evicted    = %d  \n"  , m_stat_num_evicted    ) ; 
@@ -1036,7 +1137,7 @@ void register_file_cache::print_RFC_stats( FILE *fp,
     fprintf( fp , " m_stat_num_MRF_read   = %d  \n"  , m_stat_num_MRF_read   ) ; 
     fprintf( fp , " m_stat_num_MRF_write  = %d  \n"  , m_stat_num_MRF_write  ) ; 
     fprintf( fp , "\n [EJ_RFC_PRINTING_END] \n" ) ;  
-    
+    */
     cluster_stat_num_write_miss += m_stat_num_write_miss ; 
     cluster_stat_num_write_hit  += m_stat_num_write_hit ; 
     cluster_stat_num_evicted    += m_stat_num_evicted ; 
@@ -1061,7 +1162,7 @@ register_file_cache::EJ_probe( new_addr_type addr , unsigned& idx ){
     return status ; 
 }
 enum cache_request_status 
-register_file_cache::EJ_access( new_addr_type addr , unsigned& idx )
+register_file_cache::EJ_access( new_addr_type addr , unsigned& idx , unsigned time )
 //register_file_cache::access( new_addr_type addr,
 //                         mem_fetch *mf,
 //                         unsigned time,
@@ -1090,7 +1191,7 @@ register_file_cache::EJ_access( new_addr_type addr , unsigned& idx )
     
     //printf("[EJ_ACCESS] status = %d \n" , status ) ; 
     if( status == HIT ){
-        return m_tag_array->access(addr,0,idx) ; 
+        return m_tag_array->access(addr,time,idx) ; 
     }else{
         return MISS ; 
     }
@@ -1101,7 +1202,7 @@ register_file_cache::EJ_access( new_addr_type addr , unsigned& idx )
 // is called when writeback
 // fill the tag_array with "warp id", "register number", "inst" 
 //void register_file_cache::fill( mem_fetch *mf, unsigned time ){
-void register_file_cache::EJ_fill( new_addr_type addr, unsigned reg, unsigned wid,const warp_inst_t &inst ){
+void register_file_cache::EJ_fill( new_addr_type addr, unsigned reg, unsigned wid,const warp_inst_t &inst , unsigned time ){
     // 1. it must be MISS and can do fill now 
     
     //EJ_LOG
@@ -1112,8 +1213,8 @@ void register_file_cache::EJ_fill( new_addr_type addr, unsigned reg, unsigned wi
     //assert( EJ_probe( addr , idx ) == MISS ) ; 
     assert( status  == MISS ) ; 
    
-      m_tag_array->access( addr , 0 , idx )   ;  
-      m_tag_array->fill(  idx , 0 )   ; 
+      m_tag_array->access( addr , time , idx )   ;  
+      m_tag_array->fill(  idx , time )   ; 
       new_addr_type check_addr = EJ_build_addr( reg ,wid ) ;
       assert( check_addr == addr ) ; 
       m_old_addrs[idx] = addr ; 

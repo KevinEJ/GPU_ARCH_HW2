@@ -73,6 +73,11 @@
 //EJ
 #define EJ_TEST 0
 
+#define FC_OFF 0
+#define FC_BASELINE 1
+#define FC_IBonly 2
+#define FC_FConly 3
+
 class thread_ctx_t {
 public:
    unsigned m_cta_id; // hardware CTA this thread belongs
@@ -175,11 +180,16 @@ public:
                 return false;
         return true;
     }
+    //EJ FC TODO
+    void EJ_decr_warplist( const warp_inst_t* inst , unsigned m_warp_id) ;
     void ibuffer_flush()
     {
         for(unsigned i=0;i<IBUFFER_SIZE;i++) {
             if( m_ibuffer[i].m_valid )
                 dec_inst_in_pipeline();
+            //EJ TODO 
+            EJ_decr_warplist( m_ibuffer[i].m_inst , m_warp_id ) ;
+            //m_shader->m_FC->EJ_dec_warplist( m_ibuffer[i].m_inst , m_warp_id ) ;
             m_ibuffer[i].m_inst=NULL; 
             m_ibuffer[i].m_valid=false; 
         }
@@ -188,6 +198,9 @@ public:
     bool ibuffer_next_valid() { return m_ibuffer[m_next].m_valid; }
     void ibuffer_free()
     {
+        //EJ TODO 
+        EJ_decr_warplist( m_ibuffer[m_next].m_inst , m_warp_id ) ;
+        //m_shader->m_FC->EJ_dec_warplist( m_ibuffer[m_next].m_inst , m_warp_id ) ;
         m_ibuffer[m_next].m_inst = NULL;
         m_ibuffer[m_next].m_valid = false;
     }
@@ -220,7 +233,7 @@ public:
     void inc_inst_in_pipeline() { m_inst_in_pipeline++; }
     void dec_inst_in_pipeline() 
     {
-        assert( m_inst_in_pipeline > 0 );
+        //assert( m_inst_in_pipeline > 0 );
         m_inst_in_pipeline--;
     }
 
@@ -228,9 +241,18 @@ public:
 
     unsigned get_dynamic_warp_id() const { return m_dynamic_warp_id; }
     unsigned get_warp_id() const { return m_warp_id; }
-
-private:
+    
+    struct ibuffer_entry {
+       ibuffer_entry() { m_valid = false; m_inst = NULL; FC_idx = -1 ; }
+       const warp_inst_t *m_inst;
+       bool m_valid;
+       //EJ ibuffer
+       int FC_idx ; 
+    };
+    
     static const unsigned IBUFFER_SIZE=2;
+    ibuffer_entry m_ibuffer[IBUFFER_SIZE]; 
+private:
     class shader_core_ctx *m_shader;
     unsigned m_cta_id;
     unsigned m_warp_id;
@@ -242,15 +264,8 @@ private:
     std::bitset<MAX_WARP_SIZE> m_active_threads;
 
     bool m_imiss_pending;
-    
-    struct ibuffer_entry {
-       ibuffer_entry() { m_valid = false; m_inst = NULL; }
-       const warp_inst_t *m_inst;
-       bool m_valid;
-    };
 
     const warp_inst_t *m_inst_at_barrier;
-    ibuffer_entry m_ibuffer[IBUFFER_SIZE]; 
     unsigned m_next;
                                    
     unsigned m_n_atomic;           // number of outstanding atomic operations 
@@ -387,6 +402,7 @@ protected:
     register_set* m_mem_out;
 
     int m_id;
+    friend class simt_core_cluster ; 
 };
 
 class lrr_scheduler : public scheduler_unit {
@@ -1287,20 +1303,20 @@ struct shader_core_config : public core_config
         if(ntok != 2) {
            printf("GPGPU-Sim uArch: error while parsing configuration string gpgpu_shader_core_pipeline_opt\n");
            abort();
-	}
+	    }
 
-	char* toks = new char[100];
-	char* tokd = toks;
-	strcpy(toks,pipeline_widths_string);
+	    char* toks = new char[100];
+	    char* tokd = toks;
+	    strcpy(toks,pipeline_widths_string);
 
-	toks = strtok(toks,",");
-	for (unsigned i = 0; i < N_PIPELINE_STAGES; i++) { 
-	    assert(toks);
-	    ntok = sscanf(toks,"%d", &pipe_widths[i]);
-	    assert(ntok == 1); 
-	    toks = strtok(NULL,",");
-	}
-	delete[] tokd;
+	    toks = strtok(toks,",");
+	    for (unsigned i = 0; i < N_PIPELINE_STAGES; i++) { 
+	        assert(toks);
+    	    ntok = sscanf(toks,"%d", &pipe_widths[i]);
+	        assert(ntok == 1); 
+	        toks = strtok(NULL,",");
+	    }
+	    delete[] tokd;
 
         if (n_thread_per_shader > MAX_THREAD_PER_SM) {
            printf("GPGPU-Sim uArch: Error ** increase MAX_THREAD_PER_SM in abstract_hardware_model.h from %u to %u\n", 
@@ -1316,6 +1332,7 @@ struct shader_core_config : public core_config
         m_L1C_config.init(m_L1C_config.m_config_string,FuncCachePreferNone);
         m_L1D_config.init(m_L1D_config.m_config_string,FuncCachePreferNone);
         //EJ TODO
+        m_FC_config.init(m_FC_config.m_config_string,FuncCachePreferNone);
         m_RFC_config.init(m_RFC_config.m_config_string,FuncCachePreferNone);
         //EJ END
         gpgpu_cache_texl1_linesize = m_L1T_config.get_line_sz();
@@ -1351,7 +1368,10 @@ struct shader_core_config : public core_config
     mutable l1d_cache_config m_L1D_config;
     //EJ TODO
     mutable cache_config m_RFC_config;
+    mutable cache_config m_FC_config;
     unsigned m_RFC_open ; 
+    unsigned m_FC_mode ; 
+    unsigned m_Buddy_open ; 
 
     bool gmem_skip_L1D; // on = global memory access always skip the L1 cache 
     
@@ -1691,6 +1711,10 @@ public:
     std::list<unsigned> get_regs_written( const inst_t &fvt ) const;
     const shader_core_config *get_config() const { return m_config; }
     //EJ_STATS
+    void print_FC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_miss ,
+                 unsigned& cluster_stat_num_hit  ,
+                 unsigned& cluster_stat_num_FCFail  );
     void print_RFC_stats( FILE *fp, 
                  unsigned& cluster_stat_num_write_miss ,
                  unsigned& cluster_stat_num_write_hit  ,
@@ -1819,6 +1843,8 @@ public:
 
     //EJ TODO
     //register_file_cache *m_RFC ; 
+    //EJ FC TODO
+    filter_cache *m_FC ;
 	
     private:
 	 unsigned inactive_lanes_accesses_sfu(unsigned active_count,double latency){
@@ -1839,6 +1865,7 @@ public:
     
     void issue();
     friend class scheduler_unit; //this is needed to use private issue warp.
+    friend class simt_core_cluster; //this is needed to use private issue warp.
     friend class TwoLevelScheduler;
     friend class LooseRoundRobbinScheduler;
     void issue_warp( register_set& warp, const warp_inst_t *pI, const active_mask_t &active_mask, unsigned warp_id );
@@ -1886,6 +1913,7 @@ public:
     read_only_cache *m_L1I; // instruction cache
     int  m_last_warp_fetched;
 
+
     // decode/dispatch
     std::vector<shd_warp_t>   m_warp;   // per warp information array
     barrier_set_t             m_barriers;
@@ -1928,6 +1956,13 @@ public:
                        memory_stats_t *mstats );
 
     void core_cycle();
+    //EJ TODO
+    void group_cycle();
+    void group_issue();
+    void group_decode();
+    void group_fetch();
+    void group_check_finish();
+    void ungroup();
     void icnt_cycle();
 
     void reinit();
@@ -1955,6 +1990,13 @@ public:
     void display_pipeline( unsigned sid, FILE *fout, int print_mem, int mask );
     
     //EJ_STATS
+    void print_BuddySM_stats( FILE *fp, 
+                 unsigned& cluster_stat_group ,
+                 unsigned& cluster_stat_ungroup  ) const ;
+    void print_FC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_miss ,
+                 unsigned& cluster_stat_num_hit  ,
+                 unsigned& cluster_stat_num_FCFail  ) const ;
     void print_RFC_stats( FILE *fp, 
                  unsigned& cluster_stat_num_write_miss ,
                  unsigned& cluster_stat_num_write_hit  ,
@@ -1972,9 +2014,12 @@ public:
     void get_L1T_sub_stats(struct cache_sub_stats &css) const;
 
     void get_icnt_stats(long &n_simt_to_mem, long &n_mem_to_simt) const;
-
-private:
+    //EJ Variables
+    bool m_group ;
+    unsigned m_num_group_cycle ; 
+    unsigned m_num_ungroup_cycle ; 
     unsigned m_cluster_id;
+private:
     gpgpu_sim *m_gpu;
     const shader_core_config *m_config;
     shader_core_stats *m_stats;

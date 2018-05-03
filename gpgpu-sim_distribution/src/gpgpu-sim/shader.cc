@@ -1,5 +1,4 @@
-// Copyright (c) 2009-2011, Tor M. Aamodt, Wilson W.L. Fung, Ali Bakhoda,
-// George L. Yuan, Andrew Turner, Inderpreet Singh 
+// Copyright (c) 2009-2011, Tor M. Aamodt, Wilson W.L. Fung, Ali Bakhoda, // George L. Yuan, Andrew Turner, Inderpreet Singh 
 // The University of British Columbia
 // All rights reserved.
 //
@@ -117,13 +116,13 @@ shader_core_ctx::shader_core_ctx( class gpgpu_sim *gpu,
     #define STRSIZE 1024
     char name[STRSIZE];
     snprintf(name, STRSIZE, "L1I_%03d", m_sid);
-    m_L1I = new read_only_cache( name,m_config->m_L1I_config,m_sid,get_shader_instruction_cache_id(),m_icnt,IN_L1I_MISS_QUEUE);
+    m_L1I = new read_only_cache( name, m_config->m_L1I_config,m_sid,get_shader_instruction_cache_id(),m_icnt,IN_L1I_MISS_QUEUE);
     
-    //EJ TODO
-    //char name_RFC[STRSIZE];
-    //snprintf(name_RFC, STRSIZE, "RFC_%03d", m_sid);
-    //m_RFC = new register_file_cache  ( name_RFC  ,m_config->m_RFC_config , m_sid , get_shader_instruction_cache_id() , m_icnt , IN_L1I_MISS_QUEUE);
+    //EJ FC TODO
+    char name_FC[STRSIZE];
+    snprintf(name_FC, STRSIZE, "FC_%03d", m_sid);
     //m_RFC = new register_file_cache( name_RFC , m_config->m_RFC_config , m_sid , get_shader_instruction_cache_id() , NULL   , IN_L1T_MISS_QUEUE );
+    m_FC = new filter_cache( name_FC , m_config->m_FC_config , m_sid , get_shader_instruction_cache_id() , NULL   , IN_L1T_MISS_QUEUE );
     //EJ END
     //
     m_warp.resize(m_config->max_warps_per_shader, shd_warp_t(this, warp_size));
@@ -577,6 +576,28 @@ void shader_core_ctx::decode()
         const warp_inst_t* pI1 = ptx_fetch_inst(pc);
         m_warp[m_inst_fetch_buffer.m_warp_id].ibuffer_fill(0,pI1);
         m_warp[m_inst_fetch_buffer.m_warp_id].inc_inst_in_pipeline();
+        //EJ FC TODO
+        unsigned idx ;
+        unsigned wid = m_inst_fetch_buffer.m_warp_id ; 
+        //unsigned num_inst_in_pip = m_warp[wid].num_inst_in_pipeline() ; 
+        //printf("[DECODE] warp[%d] has %d insts in pipe \n" , wid , num_inst_in_pip) ;
+        //unsigned num_inst_in_buf = m_warp[wid].num_inst_in_buffer() ; 
+        //printf("[DECODE] warp[%d] has %d insts in buf \n" , wid , num_inst_in_buf) ;
+        enum cache_request_status FC_status = m_FC->EJ_probe( (new_addr_type)pc, idx );
+        //printf("[DECODE][%d] FC_status = %d, idx = %d , pc = %d \n" , m_sid  , FC_status , idx , pc ) ;
+        assert( FC_status == MISS || FC_status == HIT ) ; 
+        if( m_config->m_FC_mode == FC_BASELINE || m_config -> m_FC_mode == FC_FConly ){
+            if( FC_status == HIT){
+                //update LRU, FIFO status 
+                m_FC -> EJ_access( (new_addr_type)pc, idx , wid , gpu_sim_cycle+gpu_tot_sim_cycle) ; 
+            }else if( FC_status == MISS ){
+                m_FC -> EJ_fill( (new_addr_type)pc , wid , 0 , *pI1 , gpu_sim_cycle+gpu_tot_sim_cycle ) ; 
+            }else{ abort() ; }
+        }else if( m_config->m_FC_mode == FC_IBonly){
+        }else{
+            assert( m_config->m_FC_mode == FC_OFF ); 
+        }
+        
         if( pI1 ) {
             m_stats->m_num_decoded_insn[m_sid]++;
             if(pI1->oprnd_type==INT_OP){
@@ -586,22 +607,115 @@ void shader_core_ctx::decode()
             }
            const warp_inst_t* pI2 = ptx_fetch_inst(pc+pI1->isize);
            if( pI2 ) {
-               m_warp[m_inst_fetch_buffer.m_warp_id].ibuffer_fill(1,pI2);
-               m_warp[m_inst_fetch_buffer.m_warp_id].inc_inst_in_pipeline();
-               m_stats->m_num_decoded_insn[m_sid]++;
-               if(pI2->oprnd_type==INT_OP){
-                   m_stats->m_num_INTdecoded_insn[m_sid]++;
-               }else if(pI2->oprnd_type==FP_OP) {
-            	   m_stats->m_num_FPdecoded_insn[m_sid]++;
-               }
+               new_addr_type pc2 = (new_addr_type)(pc+pI1->isize) ; 
+               FC_status = m_FC->EJ_probe( pc2 , idx );
+               if( FC_status == FC_FAIL ){
+                     m_FC->m_FC_FAIL ++ ; 
+         //          printf("[DECODE] Fetching second inst(PI2) error  \n") ; 
+               }else{
+                    assert( FC_status == MISS || FC_status == HIT ) ; 
+                    if( m_config->m_FC_mode == FC_BASELINE || m_config -> m_FC_mode == FC_FConly ){
+                         if( FC_status == HIT){
+                              //update LRU, FIFO status 
+                              m_FC -> EJ_access( pc2 , idx , wid,  gpu_sim_cycle+gpu_tot_sim_cycle) ; 
+                         }else if( FC_status == MISS ){
+                              m_FC -> EJ_fill( pc2 , wid , 1 , *pI2 , gpu_sim_cycle+gpu_tot_sim_cycle ) ; 
+                         }else{ abort() ; }  
+                    }
+                    m_warp[m_inst_fetch_buffer.m_warp_id].ibuffer_fill(1,pI2);
+                    m_warp[m_inst_fetch_buffer.m_warp_id].inc_inst_in_pipeline();
+                    m_stats->m_num_decoded_insn[m_sid]++;
+                    if(pI2->oprnd_type==INT_OP){
+                        m_stats->m_num_INTdecoded_insn[m_sid]++;
+                    }else if(pI2->oprnd_type==FP_OP) {
+                        m_stats->m_num_FPdecoded_insn[m_sid]++;
+                    }
+              }
            }
         }
         m_inst_fetch_buffer.m_valid = false;
+    }
+    if( m_config->m_FC_mode == FC_FConly){
+        for( unsigned i = 0 ; i < m_FC->m_num_lines ; i++){
+            for( unsigned wid = 0 ; wid < m_config->max_warps_per_shader; wid++){
+                if( m_FC -> m_warp_id_array[i][wid] == 1 ){
+                    /*printf("[TARGET][%d]  = %x \n" , i , (m_FC->m_inst[i]) ) ; 
+                    printf("[wid:%d].inst[0] = %x \n" , wid , m_warp[wid].m_ibuffer[0].m_inst ) ; 
+                    printf("[wid:%d].valid[0] = %x \n" , wid , m_warp[wid].m_ibuffer[0].m_valid ) ; 
+                    printf("[wid:%d].inst[1] = %x \n" , wid , m_warp[wid].m_ibuffer[1].m_inst ) ; 
+                    printf("[wid:%d].valid[1] = %x \n" , wid , m_warp[wid].m_ibuffer[0].m_valid ) ;*/ 
+                    if( ( m_warp[wid].m_ibuffer[0].m_inst == (m_FC->m_inst[i]) 
+                              && m_warp[wid].m_ibuffer[0].m_valid)
+                    || ( m_warp[wid].m_ibuffer[1].m_inst == (m_FC->m_inst[i])
+                              && m_warp[wid].m_ibuffer[1].m_valid )){
+                        //pass 
+                    }
+                    else{
+           //             printf(" [DECODE][%d]FC[%d][%d] miss match - 1 \n", m_sid , i , wid ) ; 
+                        abort() ; 
+                        //printf(" something is not in i_Buffer but in FC\n ") ; 
+                    }
+                }else{
+                     if( ( m_warp[wid].m_ibuffer[0].m_inst == (m_FC->m_inst[i]) 
+                              && m_warp[wid].m_ibuffer[0].m_valid)
+                    || ( m_warp[wid].m_ibuffer[1].m_inst == (m_FC->m_inst[i])
+                              && m_warp[wid].m_ibuffer[1].m_valid )){
+ //                       printf(" [DECODE][%d]FC[%d][%d] miss match - 2 \n", m_sid , i , wid ) ; 
+                        abort() ; 
+                    }
+                    else{
+                        //printf(" something is not in i_Buffer but in FC\n ") ; 
+                    }
+                }
+            }
+        } 
     }
 }
 
 void shader_core_ctx::fetch()
 {
+    //EJ_debug
+    //check how many insts are in iBuffer A
+    //check how many insts are in FC      B
+    //A should greater than B 
+    //any inst in iBuffer should be in FC
+    //check all warp_id_array bit to see if it is really in iBuffer. 
+    //for( idx = 0 ~ cache_size)
+    //    for( warp_size )
+    //        if array[idx][warp] == 1 
+    //            assert( warp[warpid].ibuffer[] == inst ) 
+    if( m_config->m_FC_mode == FC_FConly){
+         for( unsigned i = 0 ; i < m_FC->m_num_lines ; i++){
+             for( unsigned wid = 0 ; wid < m_config->max_warps_per_shader; wid++){
+                 if( m_FC -> m_warp_id_array[i][wid] == 1 ){
+                     if( ( m_warp[wid].m_ibuffer[0].m_inst == (m_FC->m_inst[i]) 
+                               && m_warp[wid].m_ibuffer[0].m_valid)
+                     || ( m_warp[wid].m_ibuffer[1].m_inst == (m_FC->m_inst[i])
+                               && m_warp[wid].m_ibuffer[1].m_valid )){
+                         //pass 
+                     }
+                     else{
+ //                        printf(" [FETCH]FC[%d][%d] miss match - 1 \n" , i , wid ) ; 
+                         abort() ; 
+                         //printf(" something is not in i_Buffer but in FC\n ") ; 
+                     }
+                 }else{
+                      if( ( m_warp[wid].m_ibuffer[0].m_inst == (m_FC->m_inst[i]) 
+                               && m_warp[wid].m_ibuffer[0].m_valid)
+                     || ( m_warp[wid].m_ibuffer[1].m_inst == (m_FC->m_inst[i])
+                               && m_warp[wid].m_ibuffer[1].m_valid )){
+        //                 printf(" [FETCH]FC[%d][%d] miss match - 2 \n" , i , wid ) ; 
+                         abort() ; 
+                     }
+                     else{
+                         //printf(" something is not in i_Buffer but in FC\n ") ; 
+                     }
+                 }
+             }
+         }           
+    }
+
+
     if( !m_inst_fetch_buffer.m_valid ) {
         // find an active warp with space in instruction buffer that is not already waiting on a cache miss
         // and get next 1-2 instructions from i-cache...
@@ -623,8 +737,9 @@ void shader_core_ctx::fetch()
                         did_exit=true;
                     }
                 }
-                if( did_exit ) 
+                if( did_exit ){ 
                     m_warp[warp_id].set_done_exit();
+                }
             }
 
             // this code fetches instructions from the i-cache or generates memory requests
@@ -647,22 +762,68 @@ void shader_core_ctx::fetch()
                                               m_tpc,
                                               m_memory_config );
                 std::list<cache_event> events;
-                enum cache_request_status status = m_L1I->access( (new_addr_type)ppc, mf, gpu_sim_cycle+gpu_tot_sim_cycle,events);
-                if( status == MISS ) {
-                    m_last_warp_fetched=warp_id;
-                    m_warp[warp_id].set_imiss_pending();
-                    m_warp[warp_id].set_last_fetch(gpu_sim_cycle);
-                } else if( status == HIT ) {
-                    m_last_warp_fetched=warp_id;
-                    m_inst_fetch_buffer = ifetch_buffer_t(pc,nbytes,warp_id);
-                    m_warp[warp_id].set_last_fetch(gpu_sim_cycle);
-                    delete mf;
-                } else {
-                    m_last_warp_fetched=warp_id;
-                    assert( status == RESERVATION_FAIL );
-                    delete mf;
+                //EJ TODO
+                if( m_config->m_FC_mode == FC_BASELINE || m_config->m_FC_mode == FC_FConly){
+                    unsigned int idx ; 
+                    enum cache_request_status FC_status = m_FC->EJ_probe( (new_addr_type)pc, idx  );
+                    
+                    //new_addr_type pc2 = (new_addr_type)(pc + pI1 -> isize) ; 
+                    //enum cache_request_status FC_status_pI2 = m_FC->EJ_probe( pc2 , idx );
+                    
+                    if( FC_status == HIT){
+                        //printf("[FC_Fetch][%d] HIT wid =%d , idx = %d , pc = %d \n" , m_sid, warp_id ,idx , pc ) ; 
+                        m_last_warp_fetched=warp_id;
+                        m_inst_fetch_buffer = ifetch_buffer_t(pc,nbytes,warp_id);
+                        m_warp[warp_id].set_last_fetch(gpu_sim_cycle);
+                        delete mf;
+                        break ; 
+                    }else if( FC_status == MISS){
+                        //printf("[FC_Fetch][%d] MISS wid =%d ,idx = %d ,pc = %d \n" , m_sid, warp_id, idx , pc ) ; 
+                        enum cache_request_status status = m_L1I->access( (new_addr_type)ppc, mf, gpu_sim_cycle+gpu_tot_sim_cycle,events);
+                        if( status == MISS ) {
+                            m_last_warp_fetched=warp_id;
+                            m_warp[warp_id].set_imiss_pending();
+                            m_warp[warp_id].set_last_fetch(gpu_sim_cycle);
+                        } else if( status == HIT ) {
+                            m_last_warp_fetched=warp_id;
+                            m_inst_fetch_buffer = ifetch_buffer_t(pc,nbytes,warp_id);
+                            m_warp[warp_id].set_last_fetch(gpu_sim_cycle);
+                            delete mf;
+                        } else {
+                            m_last_warp_fetched=warp_id;
+                            assert( status == RESERVATION_FAIL );
+                            delete mf;
+                        }
+                        break;
+                    }else if( FC_status == FC_FAIL){
+                        //printf("[FC_Fetch] FC_FAIL \n") ;
+                        m_FC->m_FC_FAIL ++ ; 
+                        assert( m_config->m_FC_mode == FC_FConly );
+                        break ; // no capacity for FC_cache 
+                    }else{ abort(); }
+                }else if( m_config->m_FC_mode == FC_IBonly){
+                }else{
+                // Filter Cache -> access/probe() ; 
+                // if HIT  -> m_inst_fetch_buffer = ifetch_buffer_t( pc, nbyte , warp_id )
+                // if MISS -> do nothing ~
+                
+                    enum cache_request_status status = m_L1I->access( (new_addr_type)ppc, mf, gpu_sim_cycle+gpu_tot_sim_cycle,events);
+                    if( status == MISS ) {
+                        m_last_warp_fetched=warp_id;
+                        m_warp[warp_id].set_imiss_pending();
+                        m_warp[warp_id].set_last_fetch(gpu_sim_cycle);
+                    } else if( status == HIT ) {
+                        m_last_warp_fetched=warp_id;
+                        m_inst_fetch_buffer = ifetch_buffer_t(pc,nbytes,warp_id);
+                        m_warp[warp_id].set_last_fetch(gpu_sim_cycle);
+                        delete mf;
+                    } else {
+                        m_last_warp_fetched=warp_id;
+                        assert( status == RESERVATION_FAIL );
+                        delete mf;
+                    }
+                    break;
                 }
-                break;
             }
         }
     }
@@ -701,7 +862,7 @@ void shader_core_ctx::issue_warp( register_set& pipe_reg_set, const warp_inst_t*
     }else if( next_inst->op == MEMORY_BARRIER_OP ){
         m_warp[warp_id].set_membar();
     }
-
+    //printf("[ISSUE_WARP][cluster:%d][Core:%d] update stack \n" , m_cluster->m_cluster_id , m_sid ) ; 
     updateSIMTStack(warp_id,*pipe_reg);
     m_scoreboard->reserveRegisters(*pipe_reg);
     m_warp[warp_id].set_next_pc(next_inst->pc + next_inst->isize);
@@ -875,7 +1036,8 @@ void scheduler_unit::cycle()
                                     issued_inst=true;
                                     warp_inst_issued = true;
                                 }
-                            }                         }
+                            }                         
+                       }
                     } else {
                         SCHED_DPRINTF( "Warp (warp_id %u, dynamic_warp_id %u) fails scoreboard\n",
                                        (*iter)->get_warp_id(), (*iter)->get_dynamic_warp_id() );
@@ -2111,6 +2273,43 @@ void gpgpu_sim::shader_print_cache_stats( FILE *fout ) const{
         fprintf(fout, "\tL1T_total_cache_reservation_fails = %u\n", total_css.res_fails);
     }
 }
+void gpgpu_sim::shader_print_BuddySM_stats( FILE *fout ) const{
+   unsigned total_stat_num_group = 0  ; 
+   unsigned total_stat_num_ungroup  = 0  ; 
+    for ( unsigned i = 0; i < m_shader_config->n_simt_clusters; ++i ) {
+        unsigned cluster_stat_group = 0  ; 
+        unsigned cluster_stat_ungroup  = 0  ; 
+        m_cluster[ i ]->print_BuddySM_stats( fout, 
+                     cluster_stat_group ,
+                     cluster_stat_ungroup  );
+        total_stat_num_group    += cluster_stat_group   ; 
+        total_stat_num_ungroup  += cluster_stat_ungroup    ; 
+    }
+   fprintf( fout, "total_Group    =%d\n", total_stat_num_group );
+   fprintf( fout, "total_unGroup  =%d\n", total_stat_num_ungroup  );
+
+}
+
+void gpgpu_sim::shader_print_FC_stats( FILE *fout ) const{
+   unsigned total_stat_num_miss = 0  ; 
+   unsigned total_stat_num_hit  = 0  ; 
+   unsigned total_stat_num_FCFail  = 0  ; 
+   for ( unsigned i = 0; i < m_shader_config->n_simt_clusters; ++i ) {
+        unsigned cluster_stat_num_miss = 0  ; 
+        unsigned cluster_stat_num_hit  = 0  ; 
+        unsigned cluster_stat_num_FCFail  = 0  ; 
+        m_cluster[ i ]->print_FC_stats( fout, 
+                     cluster_stat_num_miss ,
+                     cluster_stat_num_hit  ,
+                     cluster_stat_num_FCFail  );
+        total_stat_num_miss += cluster_stat_num_miss   ; 
+        total_stat_num_hit  += cluster_stat_num_hit    ; 
+        total_stat_num_FCFail  += cluster_stat_num_FCFail    ; 
+    }
+   fprintf( fout, "total_FC_misses=%d\n", total_stat_num_miss );
+   fprintf( fout, "total_FC_hits  =%d\n", total_stat_num_hit  );
+   fprintf( fout, "total_FC_FAILS  =%d\n", total_stat_num_FCFail  );
+}
 //EJ_STATS
 void gpgpu_sim::shader_print_RFC_stats( FILE *fout ) const
 {
@@ -2885,6 +3084,15 @@ void shader_core_ctx::store_ack( class mem_fetch *mf )
 }
 
 //EJ_STATS
+void shader_core_ctx::print_FC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_miss ,
+                 unsigned& cluster_stat_num_hit  ,
+                 unsigned& cluster_stat_num_FCFail  ){
+   m_FC -> print_FC_stats( fp, 
+           cluster_stat_num_miss ,
+           cluster_stat_num_hit  ,
+           cluster_stat_num_FCFail  );
+}
 void shader_core_ctx::print_RFC_stats( FILE *fp, 
                  unsigned& cluster_stat_num_write_miss ,
                  unsigned& cluster_stat_num_write_hit  ,
@@ -2992,6 +3200,9 @@ void shd_warp_t::print( FILE *fout ) const
         fprintf(fout,"\n");
     }
 }
+void shd_warp_t::EJ_decr_warplist( const warp_inst_t* inst , unsigned m_warp_id){
+    m_shader->m_FC->EJ_dec_warplist( inst , m_warp_id ) ;
+}
 
 void shd_warp_t::print_ibuffer( FILE *fout ) const
 {
@@ -3050,7 +3261,7 @@ void opndcoll_rfu_t::init( unsigned num_banks, shader_core_ctx *shader )
    m_initialized=true;
 
 
-    //EJ TODO
+    //EJ RFC TODO
     char name_RFC[STRSIZE];
     snprintf(name_RFC, STRSIZE, "RFC_%03d", m_shader->get_sid());
     //m_RFC = new register_file_cache  ( name_RFC  ,m_config->m_RFC_config , m_sid , get_shader_instruction_cache_id() , m_icnt , IN_L1I_MISS_QUEUE);
@@ -3072,7 +3283,7 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
    std::list<unsigned> regs = m_shader->get_regs_written(inst);  // which registers to be written 
    std::list<unsigned>::iterator r;
    unsigned n=0;
-   //EJ TODO
+   //EJ RFC TODO
    register_file_cache* RFC = m_RFC  ; 
    //#if EJ_TEST
    if( shader_core()->get_config()->m_RFC_open ){
@@ -3095,7 +3306,7 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
       //if ( RFC -> EJ_probe( RFC_addr , idx ) == HIT ){
       
           if ( status == HIT ){
-            assert( RFC->EJ_access( RFC_addr , idx ) == HIT ) ; 
+            assert( RFC->EJ_access( RFC_addr , idx , gpu_sim_cycle + gpu_tot_sim_cycle ) == HIT ) ; 
             RFC->m_stat_num_write_hit ++ ; 
           //RFC->EJ_access( RFC_addr , idx ) ; 
    //       // EJ_access -> probe -> update FIFO/LRU and return MISS/HIT 
@@ -3118,13 +3329,13 @@ bool opndcoll_rfu_t::writeback( const warp_inst_t &inst )
                         RFC -> m_stat_num_evicted ++ ; 
                         RFC -> m_stat_num_MRF_write ++ ; 
                         m_arbiter.allocate_bank_for_write(bank,op_t(old_inst,old_reg,m_num_banks,m_bank_warp_shift));
-                        RFC -> EJ_fill( RFC_addr , reg , warp_id , inst ) ;        
+                        RFC -> EJ_fill( RFC_addr , reg , warp_id , inst , gpu_sim_cycle + gpu_tot_sim_cycle ) ;        
                     }else{
                         return false; 
                     }
                 }else{
                     //First time writing 
-                    RFC -> EJ_fill( RFC_addr , reg , warp_id , inst ) ;        
+                    RFC -> EJ_fill( RFC_addr , reg , warp_id , inst , gpu_sim_cycle + gpu_tot_sim_cycle ) ;        
                     //RFC -> EJ_fill ( RFC_addr , inst ) ; 
                 }
             }
@@ -3438,16 +3649,399 @@ simt_core_cluster::simt_core_cluster( class gpgpu_sim *gpu,
         m_core[i] = new shader_core_ctx(gpu,this,sid,m_cluster_id,config,mem_config,stats);
         m_core_sim_order.push_back(i); 
     }
+    //EJ
+    m_group = true ; 
+    m_num_group_cycle = 0 ;
+    m_num_ungroup_cycle = 0 ;
 }
 
 void simt_core_cluster::core_cycle()
 {
-    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
-        m_core[*it]->cycle();
+    //EJ TODO
+    if( m_config->m_Buddy_open && m_group ){
+        //printf("[BuddySM] group cycle \n") ; 
+        m_num_group_cycle ++ ;
+        group_cycle() ;  
+    }else{
+        m_num_ungroup_cycle ++ ;
+        //printf("[BuddySM] ungroup cycle \n") ; 
+        for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+            //printf("[BuddySM] cluster[%d] , core[%d] cycling \n" , m_cluster_id , *it) ; 
+            m_core[*it]->cycle();
+        }
     }
 
     if (m_config->simt_core_sim_order == 1) {
         m_core_sim_order.splice(m_core_sim_order.end(), m_core_sim_order, m_core_sim_order.begin()); 
+    }
+}
+//EJ TODO
+void simt_core_cluster::group_cycle(){
+    //Back-End
+    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+        m_core[*it]->m_stats->shader_cycles[m_core[*it]->m_sid]++;
+        m_core[*it]->writeback();
+        m_core[*it]->execute();
+        m_core[*it]->read_operands();
+        //m_core[*it]->issue();
+        //m_core[*it]->decode();
+        //m_core[*it]->fetch();
+    }
+    
+    group_issue() ; 
+    //group_decode() ; 
+    //group_fetch() ; 
+    
+    //m_core[0]->issue() ; 
+    //m_core[0]->decode() ;
+    //group_check_finish() ; 
+    //m_core[0]->fetch()  ; 
+    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+        //m_core[*it]->issue();
+        m_core[*it]->decode();
+        //m_core[*it]->fetch();
+        //check that whether they decode and fetch the same things.
+    }   
+    group_fetch() ; 
+}
+#define curSchedPtr m_core[0]->schedulers[i]
+void simt_core_cluster::group_issue(){
+    //printf("[BuddySM]cluster[%d] group issue \n" , m_cluster_id) ; 
+    
+    for (unsigned i = 0; i < m_core[0]->schedulers.size(); i++) {
+        //scheduler_unit* curSchedPtr ; 
+        //curSchedPtr = (m_core[0]->schedulers[i]) ; 
+        bool valid_inst = false;  // there was one warp with a valid instruction to issue (didn't require flush due to control hazard)
+        bool ready_inst = false;  // of the valid instructions, there was one not waiting for pending register writes
+        bool issued_inst = false; // of these we issued one
+        curSchedPtr->order_warps();
+        // for all warp in MASTER scheduler[i] 
+        //printf("[BuddySM] for all wapr in MASTER scheduler[%d] \n" , i ) ; 
+        for ( std::vector< shd_warp_t* >::const_iterator iter = curSchedPtr->m_next_cycle_prioritized_warps.begin();
+            iter != curSchedPtr->m_next_cycle_prioritized_warps.end();
+            iter++ ) {
+            //printf("[BuddySM]cluster[%d] for all warp[%d] \n" , m_cluster_id, warp_id ) ; 
+            if ( (*iter) == NULL || (*iter)->done_exit() ) {
+                continue;
+            }
+            unsigned warp_id = (*iter)->get_warp_id();
+            unsigned checked=0;
+            unsigned issued=0;
+            unsigned max_issue = m_config->gpgpu_max_insn_issue_per_warp;
+            // For all inst in iBuffer 
+            while( !curSchedPtr->warp(warp_id).waiting() && 
+                   !curSchedPtr->warp(warp_id).ibuffer_empty() && 
+                   (checked < max_issue) && (
+                   checked <= issued) && 
+                   (issued < max_issue) ) {
+                //printf("[BuddySM]cluster[%d] for all inst warpid[%d] \n" , m_cluster_id , warp_id ) ; 
+                           
+                const warp_inst_t *pI = curSchedPtr->warp(warp_id).ibuffer_next_inst();
+                bool valid = curSchedPtr->warp(warp_id).ibuffer_next_valid();
+                bool warp_inst_issued = false;
+                unsigned ref_pc,ref_rpc;
+                curSchedPtr->m_simt_stack[warp_id]->get_pdom_stack_top_info(&ref_pc,&ref_rpc);
+                for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                    unsigned pc,rpc;
+                    if( m_core[*it]->schedulers[i]->m_simt_stack[warp_id]->get_simt_stack_size() == 0){
+                        printf("[ISSUE] cluster:%d , core:%d ungroup here : Empty \n" , m_cluster_id , m_core[*it]->m_sid ) ; 
+                        m_group = 0 ;
+                        ungroup() ; 
+                        return ; 
+                        break ; 
+                    }
+                    m_core[*it]->schedulers[i]->m_simt_stack[warp_id]->get_pdom_stack_top_info(&pc,&rpc);
+                    if( pc != ref_pc ){
+                        printf("[ISSUE] cluster:%d , core:%d ungroup here : Diverge \n" , m_cluster_id , m_core[*it]->m_sid ) ; 
+                        m_group = 0 ;
+                        ungroup() ; 
+                        return ; 
+                        break ; 
+                    }
+                }
+                for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                    // all PC should be same
+                    if( it != m_core_sim_order.begin()){
+                        const warp_inst_t *temp_pI = m_core[*it]->schedulers[i]->warp(warp_id).ibuffer_next_inst();
+                        if( temp_pI->pc != pI->pc){
+                            printf("[ISSUE] cluster:%d , core:%d ungroup here : PC error  \n" , m_cluster_id , m_core[*it]->m_sid ) ; 
+                            m_group = 0 ;
+                            ungroup() ; 
+                            return ; 
+                            break ; 
+                        }
+                    }
+                }
+                if( m_group == 0 ) { return  ; }
+                if( pI ) {
+                    assert(valid);
+                    if( ref_pc != pI->pc ) { // control hazard
+                        for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                            m_core[*it]->schedulers[i]->warp(warp_id).set_next_pc(ref_pc);
+                            m_core[*it]->schedulers[i]->warp(warp_id).ibuffer_flush();
+                        }
+                    } else {
+                        valid_inst = true;
+                        // check_scoreboard () ;
+                        bool all_pass_Scoreboard = true ;
+                        for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                            if( m_core[*it]->schedulers[i]->m_scoreboard->checkCollision(warp_id , pI ) ){
+                                all_pass_Scoreboard = false ; 
+                                break ; 
+                            }
+                        }
+                        if ( all_pass_Scoreboard ) {
+                        //if ( !curSchedPtr->m_scoreboard->checkCollision(warp_id, pI) ) {
+                            ready_inst = true;
+                            assert( curSchedPtr->warp(warp_id).inst_in_pipeline() );
+                            if ( (pI->op == LOAD_OP) || (pI->op == STORE_OP) || (pI->op == MEMORY_BARRIER_OP) ) {
+                                bool all_pass_mem_out = true ;
+                                for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                                    if( !m_core[*it]->schedulers[i]->m_mem_out->has_free() ){
+                                        all_pass_mem_out = false ; 
+                                        break ; 
+                                    }
+                                }
+                                if( all_pass_mem_out ) {
+                                //if( curSchedPtr->m_mem_out->has_free() ) {
+                                //    printf("[BuddySM] issue mem \n") ; 
+                                    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                                        const active_mask_t &active_mask = m_core[*it]->schedulers[i]->m_simt_stack[warp_id]->get_active_mask();
+                                        const warp_inst_t *issue_pI = m_core[*it]->schedulers[i]->warp(warp_id).ibuffer_next_inst();
+                                        m_core[*it]->issue_warp( *(m_core[*it]->schedulers[i]->m_mem_out) , issue_pI , active_mask , warp_id);
+                                    }
+                                    //m_core[0]->issue_warp( *(m_core[0]->schedulers[i]->m_mem_out) , pI , active_mask , warp_id);
+                                    issued++;
+                                    issued_inst=true;
+                                    warp_inst_issued = true;
+                                }else{
+                                    //printf("[BuddySM] mem_out pass fail \n") ;
+                                }
+                            } else {
+                                bool sp_pipe_avail = curSchedPtr->m_sp_out->has_free();
+                                bool sfu_pipe_avail = curSchedPtr->m_sfu_out->has_free();
+                                if( sp_pipe_avail && (pI->op != SFU_OP) ) {
+                                    // always prefer SP pipe for operations that can use both SP and SFU pipelines
+                                    //m_shader->issue_warp(*m_sp_out,pI,active_mask,warp_id);
+                                //    printf("[BuddySM] sp mem \n") ; 
+                                    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                                        const active_mask_t &active_mask = m_core[*it]->schedulers[i]->m_simt_stack[warp_id]->get_active_mask();
+                                        const warp_inst_t *issue_pI = m_core[*it]->schedulers[i]->warp(warp_id).ibuffer_next_inst();
+                                        m_core[*it]->issue_warp( *(m_core[*it]->schedulers[i]->m_sp_out) , issue_pI , active_mask , warp_id);
+                                    }
+                                    //m_core[0]->issue_warp( *(m_core[0]->schedulers[i]->m_sp_out) , pI , active_mask , warp_id);
+                                    issued++;
+                                    issued_inst=true;
+                                    warp_inst_issued = true;
+                                } else if ( (pI->op == SFU_OP) || (pI->op == ALU_SFU_OP) ) {
+                                    if( sfu_pipe_avail ) {
+                                  //      printf("[BuddySM] issue sfu \n") ; 
+                                        for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                                            const active_mask_t &active_mask = m_core[*it]->schedulers[i]->m_simt_stack[warp_id]->get_active_mask();
+                                            const warp_inst_t *issue_pI = m_core[*it]->schedulers[i]->warp(warp_id).ibuffer_next_inst();
+                                            m_core[*it]->issue_warp( *(m_core[*it]->schedulers[i]->m_sfu_out) , issue_pI , active_mask , warp_id);
+                                        }
+                                        //m_core[0]->issue_warp( *(m_core[0]->schedulers[i]->m_sfu_out) , pI , active_mask , warp_id);
+                                        //m_shader->issue_warp(*m_sfu_out,pI,active_mask,warp_id);
+                                        issued++;
+                                        issued_inst=true;
+                                        warp_inst_issued = true;
+                                    }
+                                }                         
+                            }
+                        }else{
+                            //printf("Scoreboard fail \n"); // fails scoreboard 
+                        }
+                    }
+                }else if(valid){
+                    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                        m_core[*it]->schedulers[i]->warp(warp_id).set_next_pc(ref_pc);
+                        m_core[*it]->schedulers[i]->warp(warp_id).ibuffer_flush();
+                    }
+                }
+                if(warp_inst_issued) {
+                    //curSchedPtr->warp(warp_id).ibuffer_step();
+                    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                        m_core[*it]->schedulers[i]->do_on_warp_issued( warp_id, issued, iter );
+                    }
+                }
+                checked++;
+            }
+            if( issued){
+                for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                    for ( std::vector< shd_warp_t* >::const_iterator supervised_iter = m_core[*it]->schedulers[i]->m_supervised_warps.begin();
+                        supervised_iter != m_core[*it]->schedulers[i]->m_supervised_warps.end();
+                        ++supervised_iter ) {
+                        if ( *iter == *supervised_iter ) {
+                            m_core[*it]->schedulers[i]->m_last_supervised_issued = supervised_iter;
+                        }
+                    }
+                }
+                break ; 
+            }
+        }
+    }
+}
+
+void simt_core_cluster::group_decode(){
+}
+
+void simt_core_cluster::group_fetch(){
+    
+    //if( !m_inst_fetch_buffer.m_valid ) {
+    bool all_pass_fetch_buffer = true ;
+    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+        if( m_core[*it]->m_inst_fetch_buffer.m_valid ){
+            all_pass_fetch_buffer = false ; 
+            break ; 
+        }
+    }
+    if( all_pass_fetch_buffer ) {
+        for( unsigned i=0; i < m_config->max_warps_per_shader; i++ ) {
+            unsigned warp_id = (m_core[0]->m_last_warp_fetched+1+i) % m_config->max_warps_per_shader;
+            // check all cores are done 
+            //bool if_all_exit = false ; 
+            bool if_last_exit = false ; 
+            for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+               if( m_core[*it]->m_warp[warp_id].hardware_done() && 
+                   !m_core[*it]->m_scoreboard->pendingWrites(warp_id) && 
+                   !m_core[*it]->m_warp[warp_id].done_exit() ) {
+                    bool did_exit=false;
+                    for( unsigned t=0; t<m_config->warp_size;t++) {
+                        unsigned tid=warp_id*m_config->warp_size+t;
+                        if( m_core[*it]->m_threadState[tid].m_active == true ) {
+                            m_core[*it]->m_threadState[tid].m_active = false; 
+                            unsigned cta_id = m_core[*it]->m_warp[warp_id].get_cta_id();
+                            m_core[*it]->register_cta_thread_exit(cta_id);
+                            m_core[*it]->m_not_completed -= 1;
+                            m_core[*it]->m_active_threads.reset(tid);
+                            assert( m_core[*it]->m_thread[tid]!= NULL );
+                            did_exit=true;
+                        }
+                    }
+                    if( if_last_exit != did_exit && it != m_core_sim_order.begin()  ){
+                        if( m_group == 1 ){
+                            if( did_exit )
+                                printf("[FETCH] cluster:%d , core:%d ungroup here : Terminate \n" , m_cluster_id , m_core[*it]->m_sid ) ; 
+                            else
+                                printf("[FETCH] cluster:%d , core:%d ungroup here : Not terminate \n" , m_cluster_id , m_core[*it]->m_sid ) ; 
+                            m_group = 0 ; 
+                            ungroup() ; 
+                            return ; 
+                        }
+                    }
+                    if_last_exit = did_exit ; 
+                    if( did_exit ){ 
+                        m_core[*it]->m_warp[warp_id].set_done_exit();
+                        //EJ TODO
+                    }
+                    
+                }
+            }
+            //recheck
+            bool master_done_exit = m_core[0]->m_warp[warp_id].done_exit() ; 
+            for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                if( master_done_exit != m_core[*it]->m_warp[warp_id].done_exit() ){
+                    if( m_group == 1 ){
+                        printf("[FETCH] cluster:%d , core:%d ungroup here : Recheck \n" , m_cluster_id , m_core[*it]->m_sid ) ; 
+                        m_group = 0 ; 
+                        ungroup() ; 
+                        return ; 
+                    }
+                }
+            }//
+            //fetch
+            // if( !m_warp[warp_id].functional_done() && !m_warp[warp_id].imiss_pending() && m_warp[warp_id].ibuffer_empty() ) 
+            bool all_pass_fetch_valid = true ;
+            for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                if( !(!m_core[*it]->m_warp[warp_id].functional_done() && 
+                      !m_core[*it]->m_warp[warp_id].imiss_pending() && 
+                      m_core[*it]->m_warp[warp_id].ibuffer_empty()) ) {
+                    all_pass_fetch_valid = false ; 
+                    break ; 
+                }
+            }
+            //check all pc
+            bool all_pass_PC_check = true ;
+            address_type ref_pc  = m_core[0]->m_warp[warp_id].get_pc();
+            for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                address_type pc  = m_core[*it]->m_warp[warp_id].get_pc();
+                if( ref_pc != pc ){
+                    if( m_group == 1 ){
+                        printf("[FETCH] cluster:%d , core:%d ungroup here : diff PC \n" , m_cluster_id , m_core[*it]->m_sid ) ; 
+                        m_group = 0 ; 
+                        ungroup();
+                        return ; 
+                    }
+                    all_pass_PC_check = false ;
+                    break;
+                }
+            }
+            if(all_pass_fetch_valid && all_pass_PC_check ){
+                address_type pc  = m_core[0]->m_warp[warp_id].get_pc();
+                address_type ppc = pc + PROGRAM_MEM_START;
+                unsigned nbytes=16; 
+                unsigned offset_in_block = pc & (m_config->m_L1I_config.get_line_sz()-1);
+                if( (offset_in_block+nbytes) > m_config->m_L1I_config.get_line_sz() )
+                    nbytes = (m_config->m_L1I_config.get_line_sz()-offset_in_block);
+                //generate mem event
+                mem_access_t acc(INST_ACC_R,ppc,nbytes,false);
+                mem_fetch *mf = new mem_fetch(acc,
+                                              NULL/*we don't have an instruction yet*/,
+                                              READ_PACKET_SIZE,
+                                              warp_id,
+                                              m_core[0]->m_sid,
+                                              m_core[0]->m_tpc,
+                                              m_core[0]->m_memory_config );
+                std::list<cache_event> events;
+                enum cache_request_status status = m_core[0]->m_L1I->access( (new_addr_type)ppc, mf, gpu_sim_cycle+gpu_tot_sim_cycle,events);
+                if( status == MISS ) {
+                    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                        m_core[*it]->m_last_warp_fetched=warp_id;
+                        m_core[*it]->m_warp[warp_id].set_imiss_pending();
+                        m_core[*it]->m_warp[warp_id].set_last_fetch(gpu_sim_cycle);
+                    }
+                } else if( status == HIT ) {
+                    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                        m_core[*it]->m_last_warp_fetched=warp_id;
+                        m_core[*it]->m_inst_fetch_buffer = ifetch_buffer_t(pc,nbytes,warp_id);
+                        m_core[*it]->m_warp[warp_id].set_last_fetch(gpu_sim_cycle);
+                    }
+                    delete mf;
+                } else {
+                    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+                        m_core[*it]->m_last_warp_fetched=warp_id;
+                        assert( status == RESERVATION_FAIL );
+                    }
+                    delete mf;
+                }
+                break;
+            }
+        }
+    }
+    m_core[0]->m_L1I->cycle();
+
+    if( m_core[0]->m_L1I->access_ready() ) {
+        mem_fetch *mf = m_core[0]->m_L1I->next_access();
+        for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+            m_core[*it]->m_warp[mf->get_wid()].clear_imiss_pending();
+        }
+        delete mf;
+    }
+
+}
+void simt_core_cluster::group_check_finish(){
+
+}
+
+void simt_core_cluster::ungroup(){
+    // clear all pending Instructions 
+    m_group = 0 ; 
+    for( std::list<unsigned>::iterator it = m_core_sim_order.begin(); it != m_core_sim_order.end(); ++it ) {
+        for( unsigned i=0; i < m_config->max_warps_per_shader; i++ ) {
+            m_core[*it]->m_warp[i].clear_imiss_pending();
+            //m_core[*it]->m_warp[i].ibuffer_flush();
+        }
     }
 }
 
@@ -3497,22 +4091,61 @@ unsigned simt_core_cluster::get_n_active_sms() const
 
 unsigned simt_core_cluster::issue_block2core()
 {
+    //printf("[issue_block2core] \n") ; 
+    //EJ TODO
     unsigned num_blocks_issued=0;
-    for( unsigned i=0; i < m_config->n_simt_cores_per_cluster; i++ ) {
-        unsigned core = (i+m_cta_issue_next_core+1)%m_config->n_simt_cores_per_cluster;
-        if( m_core[core]->get_not_completed() == 0 ) {
-            if( m_core[core]->get_kernel() == NULL ) {
-                kernel_info_t *k = m_gpu->select_kernel();
-                if( k ) 
-                    m_core[core]->set_kernel(k);
+    if( m_config->m_Buddy_open ){
+        unsigned num_blocks_issued=0;
+        bool all_pass_kernel = true ;
+        for( unsigned i=0; i < m_config->n_simt_cores_per_cluster; i++ ) { 
+            if( !( m_core[i]->get_not_completed() == 0 && !m_core[i]->get_kernel() ) ) {
+                all_pass_kernel = false ; 
+                break ; 
+            }
+        } 
+        if( all_pass_kernel ){
+            kernel_info_t *k = m_gpu->select_kernel();
+        
+            if( k ){ 
+                for( unsigned i=0; i < m_config->n_simt_cores_per_cluster; i++ ) { 
+                    printf("[issue_block2core] cluster[%d] -> set kernel core[%d] \n" , m_cluster_id , i ) ; 
+                    m_core[i]->set_kernel(k);
+                }
             }
         }
-        kernel_info_t *kernel = m_core[core]->get_kernel();
-        if( kernel && !kernel->no_more_ctas_to_run() && (m_core[core]->get_n_active_cta() < m_config->max_cta(*kernel)) ) {
-            m_core[core]->issue_block2core(*kernel);
-            num_blocks_issued++;
-            m_cta_issue_next_core=core; 
-            break;
+        for( unsigned i=0; i < m_config->n_simt_cores_per_cluster; i++ ) { 
+            kernel_info_t *kernel = m_core[i]->get_kernel();
+            if( kernel && !kernel->no_more_ctas_to_run() && (m_core[i]->get_n_active_cta() < m_config->max_cta(*kernel)) ) {
+                printf("[issue_block2core] cluster[%d] -> issue core[%d] \n" , m_cluster_id , i ) ; 
+                m_core[i]->issue_block2core(*kernel);
+                num_blocks_issued++;
+                // if one is issued, the other should be also issued.
+                printf("[ISSUE] cluster[%d] -> issue core[%d] regrouping \n" , m_cluster_id , i );
+                m_group = 1 ; 
+                //m_cta_issue_next_core = core; 
+            }
+        } 
+    }else{
+        num_blocks_issued=0;
+        for( unsigned i=0; i < m_config->n_simt_cores_per_cluster; i++ ) {
+            unsigned core = (i+m_cta_issue_next_core+1)%m_config->n_simt_cores_per_cluster;
+            if( m_core[core]->get_not_completed() == 0 ) {
+                if( m_core[core]->get_kernel() == NULL ) {
+                    kernel_info_t *k = m_gpu->select_kernel();
+                    if( k ){ 
+                        //printf("[issue_block2core] cluster[%d] -> set kernel core[%d] \n" , m_cluster_id , core ) ; 
+                        m_core[core]->set_kernel(k);
+                    }
+                }
+            }
+            kernel_info_t *kernel = m_core[core]->get_kernel();
+            if( kernel && !kernel->no_more_ctas_to_run() && (m_core[core]->get_n_active_cta() < m_config->max_cta(*kernel)) ) {
+                //printf("[issue_block2core] cluster[%d] -> issue core[%d] \n" , m_cluster_id , core ) ; 
+                m_core[core]->issue_block2core(*kernel);
+                num_blocks_issued++;
+                m_cta_issue_next_core=core; 
+                break;
+            }
         }
     }
     return num_blocks_issued;
@@ -3627,6 +4260,26 @@ void simt_core_cluster::display_pipeline( unsigned sid, FILE *fout, int print_me
 }
 
 //EJ_STATS
+void simt_core_cluster::print_BuddySM_stats( FILE *fp, 
+                 unsigned& cluster_stat_group ,
+                 unsigned& cluster_stat_ungroup  ) const {
+    cluster_stat_group += m_num_group_cycle ; 
+    cluster_stat_ungroup += m_num_ungroup_cycle ; 
+    
+    fprintf( fp, "local_Group    =%d\n", m_num_group_cycle );
+    fprintf( fp, "local_unGroup  =%d\n", m_num_ungroup_cycle  );
+}
+void simt_core_cluster::print_FC_stats( FILE *fp, 
+                 unsigned& cluster_stat_num_miss ,
+                 unsigned& cluster_stat_num_hit  ,
+                 unsigned& cluster_stat_num_FCFail  ) const {
+   for ( unsigned i = 0; i < m_config->n_simt_cores_per_cluster; ++i ) {
+        m_core[i]->print_FC_stats( fp, 
+                     cluster_stat_num_miss ,
+                     cluster_stat_num_hit  ,
+                     cluster_stat_num_FCFail  );
+    }
+}
 void simt_core_cluster::print_RFC_stats( FILE *fp, 
                  unsigned& cluster_stat_num_write_miss ,
                  unsigned& cluster_stat_num_write_hit  ,

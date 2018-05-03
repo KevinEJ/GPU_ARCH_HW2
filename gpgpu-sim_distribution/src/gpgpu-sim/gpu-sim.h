@@ -430,6 +430,8 @@ private:
    void shader_print_l1_miss_stat( FILE *fout ) const;
    //EJ_STATS
    void shader_print_RFC_stats( FILE *fout ) const ;
+   void shader_print_FC_stats( FILE *fout ) const ;
+   void shader_print_BuddySM_stats( FILE *fout ) const ;
    
    void shader_print_cache_stats( FILE *fout ) const;
    void shader_print_scheduler_stat( FILE* fout, bool print_dynamic_info ) const;
